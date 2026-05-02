@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "declaration": true,
+    "composite": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@codemem/shared/*": [
+        "packages/codemem-shared/src/*"
+      ],
+      "@codemem/shared": [
+        "packages/codemem-shared/src/index.ts"
+      ],
+      "@opencode-ai/plugin": [
+        "node_modules/@opencode-ai/plugin/dist/index.d.ts"
+      ]
+    }
+  }
+}

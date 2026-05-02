@@ -1,0 +1,196 @@
+import net from "node:net";
+import { once } from "node:events";
+import {
+  CODEMEM_PROTOCOL_VERSION,
+  createRpcRequest,
+  decodeFrames,
+  encodeFrame,
+  isRpcErrorResponse,
+  type CheckRequest,
+  type CheckResponse,
+  type ConflictsRequest,
+  type ConflictsResponse,
+  type DriftMapRequest,
+  type DriftMapResponse,
+  type FilesChangedNotification,
+  type HealthRequest,
+  type HealthResponse,
+  type MaintainRequest,
+  type MaintainResponse,
+  type RebuildRequest,
+  type RebuildResponse,
+  type RpcMethod,
+  type RpcMethodMap,
+  type RpcResponseEnvelope,
+  type StatusRequest,
+  type StatusResponse,
+} from "@codemem/shared/protocol";
+
+export type DaemonEndpoint = {
+  address: string;
+  authToken?: string;
+  maxPayloadBytes: number;
+  connectTimeoutMs: number;
+  requestTimeoutMs: number;
+};
+
+export class DaemonClient {
+  readonly endpoint: DaemonEndpoint;
+
+  constructor(endpoint: DaemonEndpoint) {
+    this.endpoint = endpoint;
+  }
+
+  health(params: HealthRequest): Promise<HealthResponse> {
+    return this.request("health", params, { timeoutMs: this.endpoint.connectTimeoutMs });
+  }
+
+  filesChanged(params: FilesChangedNotification): Promise<{ accepted: boolean }> {
+    return this.request("project.filesChanged", params, { timeoutMs: this.endpoint.requestTimeoutMs });
+  }
+
+  check(params: CheckRequest): Promise<CheckResponse> {
+    return this.request("analysis.check", params);
+  }
+
+  driftMap(params: DriftMapRequest): Promise<DriftMapResponse> {
+    return this.request("analysis.driftMap", params);
+  }
+
+  conflicts(params: ConflictsRequest): Promise<ConflictsResponse> {
+    return this.request("analysis.conflicts", params);
+  }
+
+  status(params: StatusRequest): Promise<StatusResponse> {
+    return this.request("maintenance.status", params);
+  }
+
+  maintain(params: MaintainRequest): Promise<MaintainResponse> {
+    return this.request("maintenance.maintain", params, { timeoutMs: 30_000 });
+  }
+
+  rebuild(params: RebuildRequest): Promise<RebuildResponse> {
+    return this.request("maintenance.rebuild", params, { timeoutMs: 30_000 });
+  }
+
+  async request<M extends RpcMethod>(
+    method: M,
+    params: RpcMethodMap[M]["params"],
+    options?: { timeoutMs?: number },
+  ): Promise<RpcMethodMap[M]["result"]> {
+    const timeoutMs = options?.timeoutMs ?? this.endpoint.requestTimeoutMs;
+    const request = createRpcRequest(method, params, this.endpoint.authToken);
+    const response = await this.exchange(request, timeoutMs);
+
+    if (response.protocolVersion !== CODEMEM_PROTOCOL_VERSION) {
+      throw new Error(
+        `codemem protocol mismatch: client=${CODEMEM_PROTOCOL_VERSION} daemon=${response.protocolVersion}`,
+      );
+    }
+
+    if (isRpcErrorResponse(response)) {
+      const error = new Error(`codemem ${response.error.code}: ${response.error.message}`) as Error & {
+        retryable?: boolean;
+        details?: Record<string, unknown>;
+      };
+      error.retryable = response.error.retryable;
+      error.details = response.error.details;
+      throw error;
+    }
+
+    if (!response.result) {
+      throw new Error(`codemem daemon returned no result for ${method}`);
+    }
+
+    return response.result as RpcMethodMap[M]["result"];
+  }
+
+  private async exchange(
+    request: ReturnType<typeof createRpcRequest>,
+    timeoutMs: number,
+  ): Promise<RpcResponseEnvelope> {
+    const socket = await connectSocket(this.endpoint.address, this.endpoint.connectTimeoutMs);
+    socket.setNoDelay(true);
+
+    try {
+      const payload = encodeFrame(request);
+      if (payload.length > this.endpoint.maxPayloadBytes) {
+        throw new Error(
+          `codemem payload too large (${payload.length} bytes > ${this.endpoint.maxPayloadBytes} bytes)`,
+        );
+      }
+
+      const response = await readResponse(socket, payload, request.id, timeoutMs);
+      return response;
+    } finally {
+      socket.destroy();
+    }
+  }
+}
+
+async function connectSocket(address: string, timeoutMs: number): Promise<any> {
+  const socket = net.createConnection(address);
+  socket.setTimeout(0);
+
+  const onError = new Promise<never>((_, reject) => {
+    socket.once("error", (error) => reject(error));
+  });
+  const onConnect = once(socket, "connect");
+  const timeout = createTimeout(timeoutMs, () => {
+    socket.destroy(new Error(`codemem connect timeout after ${timeoutMs}ms`));
+  });
+
+  try {
+    await Promise.race([onConnect, onError]);
+    return socket;
+  } finally {
+    clearTimeout(timeout as any);
+  }
+}
+
+async function readResponse(
+  socket: any,
+  payload: Buffer,
+  requestID: string,
+  timeoutMs: number,
+): Promise<RpcResponseEnvelope> {
+  let buffer = Buffer.alloc(0);
+
+  const timeout = createTimeout(timeoutMs, () => {
+    socket.destroy(new Error(`codemem request timeout after ${timeoutMs}ms`));
+  });
+
+  try {
+    const responsePromise = new Promise<RpcResponseEnvelope>((resolve, reject) => {
+      socket.on("data", (chunk: Buffer) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        const decoded = decodeFrames(buffer);
+        buffer = decoded.remainder;
+        for (const message of decoded.messages) {
+          if (!("id" in message)) {
+            continue;
+          }
+          if (message.id === requestID) {
+            resolve(message);
+            return;
+          }
+        }
+      });
+      socket.once("error", reject);
+      socket.once("close", (hadError: boolean) => {
+        if (!hadError) {
+          reject(new Error("codemem daemon closed the socket before sending a response"));
+        }
+      });
+    });
+
+    socket.write(payload);
+    return await responsePromise;
+  } finally {
+    clearTimeout(timeout as any);
+  }
+}
+
+function createTimeout(timeoutMs: number, onTimeout: () => void): NodeJS.Timeout {
+  return setTimeout(onTimeout, Math.max(1, timeoutMs));
+}

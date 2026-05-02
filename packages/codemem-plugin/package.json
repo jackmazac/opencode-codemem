@@ -1,0 +1,29 @@
+{
+  "name": "@codemem/plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "bin",
+    "dist",
+    "package.json"
+  ],
+  "dependencies": {
+    "@opencode-ai/plugin": "1.14.31"
+  },
+  "peerDependencies": {
+    "@codemem/shared": "0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@codemem/shared": {
+      "optional": true
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  }
+}

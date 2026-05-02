@@ -1,0 +1,30 @@
+node_modules/
+
+# TypeScript build output
+packages/*/dist/
+packages/*/*.tsbuildinfo
+
+# Rust build output
+packages/codemem-daemon/target/
+
+# Local codemem state
+.codemem/
+.git/codemem/
+codemem.config.json
+codemem.config.jsonc
+.codememrc.jsonc
+.opencode/
+
+# Local package artifacts
+artifacts/
+*.tgz
+packages/codemem-plugin/bin/
+
+# Logs and coverage
+coverage/
+*.log
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/

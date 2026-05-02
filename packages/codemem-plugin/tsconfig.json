@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "references": [
+    {
+      "path": "../codemem-shared"
+    }
+  ],
+  "include": [
+    "src/**/*.ts",
+    "../../types/**/*.d.ts"
+  ],
+  "exclude": [
+    "src/**/*.test.ts"
+  ]
+}

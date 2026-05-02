@@ -1,0 +1,24 @@
+{
+  "name": "codemem-workspace",
+  "private": true,
+  "packageManager": "bun@1.3.13",
+  "workspaces": [
+    "packages/codemem-shared",
+    "packages/codemem-plugin"
+  ],
+  "scripts": {
+    "build:ts": "tsc -b packages/codemem-shared packages/codemem-plugin --pretty false",
+    "build:daemon": "cargo build --release --manifest-path packages/codemem-daemon/Cargo.toml",
+    "build": "bun run build:ts && bun run build:daemon",
+    "typecheck": "tsc -b packages/codemem-shared packages/codemem-plugin --pretty false",
+    "test:ts": "bun test",
+    "test:daemon": "cargo test --manifest-path packages/codemem-daemon/Cargo.toml",
+    "test": "bun run test:ts && bun run test:daemon",
+    "package:local": "bun ./scripts/package-local.mjs",
+    "verify": "bun run typecheck && bun run test && bun run build && bun run package:local",
+    "clean": "node ./scripts/clean.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
