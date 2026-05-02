@@ -129,6 +129,16 @@ impl ModuleGraph {
             }
         }
 
+        findings.extend(self.package_cycle_findings(max_findings.saturating_sub(findings.len())));
+
+        findings
+    }
+
+    pub fn package_cycle_findings(&self, max_findings: usize) -> Vec<Finding> {
+        if max_findings == 0 {
+            return Vec::new();
+        }
+        let mut findings = Vec::new();
         for component in self.package_cycles() {
             if component.len() < 2 {
                 continue;
@@ -147,7 +157,8 @@ impl ModuleGraph {
                         score: Some(0.98),
                     })
                     .collect(),
-                action: "Reassign ownership so package dependencies flow in one direction only.".into(),
+                action: "Reassign ownership so package dependencies flow in one direction only."
+                    .into(),
                 nodes: component,
                 package_level: true,
             });
@@ -205,7 +216,10 @@ impl ModuleGraph {
 
         let mut current_map = BTreeMap::new();
         for export in current {
-            current_map.insert((export.export_name.clone(), export.source_file.clone()), export.signature);
+            current_map.insert(
+                (export.export_name.clone(), export.source_file.clone()),
+                export.signature,
+            );
         }
 
         let mut findings = Vec::new();
@@ -287,7 +301,12 @@ impl ModuleGraph {
         let mut map = DriftMapAssembly::default();
         for finding in &findings {
             match finding {
-                Finding::SemanticClone { files, symbols, severity, .. } => {
+                Finding::SemanticClone {
+                    files,
+                    symbols,
+                    severity,
+                    ..
+                } => {
                     for file in files {
                         map.insert_node(DriftMapNode {
                             id: format!("file:{file}"),
@@ -313,7 +332,9 @@ impl ModuleGraph {
                         });
                     }
                 }
-                Finding::TypeShapeDuplicate { symbols, severity, .. } => {
+                Finding::TypeShapeDuplicate {
+                    symbols, severity, ..
+                } => {
                     for symbol in symbols {
                         map.insert_node(DriftMapNode {
                             id: format!("type:{symbol}"),
@@ -351,7 +372,12 @@ impl ModuleGraph {
                         kind: "export".into(),
                         severity: Some(*severity),
                     });
-                    map.insert_edge(format!("file:{source_file}"), export_id.clone(), "exports".into(), false);
+                    map.insert_edge(
+                        format!("file:{source_file}"),
+                        export_id.clone(),
+                        "exports".into(),
+                        false,
+                    );
                     for caller in affected_callers {
                         map.insert_node(DriftMapNode {
                             id: format!("file:{caller}"),
@@ -359,7 +385,12 @@ impl ModuleGraph {
                             kind: "file".into(),
                             severity: None,
                         });
-                        map.insert_edge(format!("file:{caller}"), export_id.clone(), "depends_on".into(), false);
+                        map.insert_edge(
+                            format!("file:{caller}"),
+                            export_id.clone(),
+                            "depends_on".into(),
+                            false,
+                        );
                     }
                 }
                 Finding::DeadCode { file, severity, .. } => {
@@ -482,12 +513,21 @@ impl ModuleGraph {
     fn package_cycles(&self) -> Vec<Vec<String>> {
         let mut graph: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (from, edges) in &self.imports_from {
-            let Some(from_package) = self.package_id(from) else { continue };
+            let Some(from_package) = self.package_id(from) else {
+                continue;
+            };
             for edge in edges {
-                let Some(target) = edge.to_path.as_ref() else { continue };
-                let Some(to_package) = self.package_id(target) else { continue };
+                let Some(target) = edge.to_path.as_ref() else {
+                    continue;
+                };
+                let Some(to_package) = self.package_id(target) else {
+                    continue;
+                };
                 if from_package != to_package {
-                    graph.entry(from_package.clone()).or_default().push(to_package);
+                    graph
+                        .entry(from_package.clone())
+                        .or_default()
+                        .push(to_package);
                 }
             }
         }
@@ -509,10 +549,17 @@ impl ModuleGraph {
 
     fn package_id(&self, file: &str) -> Option<String> {
         for boundary in &self.package_boundaries {
-            let Ok(glob) = Glob::new(&boundary.root) else { continue };
+            let Ok(glob) = Glob::new(&boundary.root) else {
+                continue;
+            };
             let matcher = glob.compile_matcher();
             if matcher.is_match(file) {
-                return Some(boundary.name.clone().unwrap_or_else(|| boundary.root.clone()));
+                return Some(
+                    boundary
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| boundary.root.clone()),
+                );
             }
         }
         None
@@ -526,9 +573,16 @@ fn expand_entrypoints(all_files: &BTreeSet<String>, patterns: &[String]) -> Vec<
     let mut entrypoints = Vec::new();
     for pattern in patterns {
         if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
-            let Ok(glob) = Glob::new(pattern) else { continue };
+            let Ok(glob) = Glob::new(pattern) else {
+                continue;
+            };
             let matcher = glob.compile_matcher();
-            entrypoints.extend(all_files.iter().filter(|file| matcher.is_match(file.as_str())).cloned());
+            entrypoints.extend(
+                all_files
+                    .iter()
+                    .filter(|file| matcher.is_match(file.as_str()))
+                    .cloned(),
+            );
         } else if all_files.contains(pattern) {
             entrypoints.push(pattern.clone());
         }
@@ -563,7 +617,8 @@ fn tarjan_scc(graph: &BTreeMap<String, Vec<String>>) -> Vec<Vec<String>> {
                     self.strong_connect(next.clone());
                     let lowlink = self.lowlinks.get(&node).copied().unwrap_or(current_index);
                     let next_lowlink = self.lowlinks.get(&next).copied().unwrap_or(current_index);
-                    self.lowlinks.insert(node.clone(), lowlink.min(next_lowlink));
+                    self.lowlinks
+                        .insert(node.clone(), lowlink.min(next_lowlink));
                 } else if self.on_stack.contains(&next) {
                     let lowlink = self.lowlinks.get(&node).copied().unwrap_or(current_index);
                     let next_index = self.indices.get(&next).copied().unwrap_or(current_index);

@@ -2,14 +2,17 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use json_comments::StripComments;
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::Read, path::Path};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Component, Path},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Layers {
     pub ast_clones: bool,
     pub simhash_clones: bool,
-    pub semantic_clones: bool,
     pub type_shapes: bool,
     pub symbol_graph: bool,
     pub api_drift: bool,
@@ -22,7 +25,6 @@ impl Default for Layers {
         Self {
             ast_clones: true,
             simhash_clones: true,
-            semantic_clones: false,
             type_shapes: true,
             symbol_graph: true,
             api_drift: true,
@@ -38,8 +40,6 @@ pub struct Thresholds {
     pub min_clone_tokens: usize,
     pub min_clone_statements: usize,
     pub simhash_hamming_radius: u8,
-    pub semantic_clone_cosine: f64,
-    pub semantic_candidate_k: usize,
     pub max_findings: usize,
     pub type_shape_min_members: usize,
     pub session_conflict_overlap: f64,
@@ -52,8 +52,6 @@ impl Default for Thresholds {
             min_clone_tokens: 24,
             min_clone_statements: 3,
             simhash_hamming_radius: 6,
-            semantic_clone_cosine: 0.88,
-            semantic_candidate_k: 16,
             max_findings: 50,
             type_shape_min_members: 3,
             session_conflict_overlap: 0.25,
@@ -72,7 +70,11 @@ pub struct Telemetry {
 
 impl Default for Telemetry {
     fn default() -> Self {
-        Self { enabled: true, retain_days: 14, max_log_bytes: 8 * 1024 * 1024 }
+        Self {
+            enabled: true,
+            retain_days: 14,
+            max_log_bytes: 8 * 1024 * 1024,
+        }
     }
 }
 
@@ -86,7 +88,11 @@ pub struct PackageBoundary {
 
 impl Default for PackageBoundary {
     fn default() -> Self {
-        Self { root: String::new(), name: None, kind: None }
+        Self {
+            root: String::new(),
+            name: None,
+            kind: None,
+        }
     }
 }
 
@@ -133,7 +139,9 @@ impl ProjectConfig {
     pub fn ignore_set(&self) -> Result<GlobSet> {
         let mut builder = GlobSetBuilder::new();
         for pattern in &self.ignore {
-            builder.add(Glob::new(pattern).with_context(|| format!("invalid ignore glob: {pattern}"))?);
+            builder.add(
+                Glob::new(pattern).with_context(|| format!("invalid ignore glob: {pattern}"))?,
+            );
         }
         Ok(builder.build()?)
     }
@@ -156,7 +164,8 @@ pub fn load_project_config(project_root: &Path) -> Result<ProjectConfig> {
 }
 
 fn load_specific_config(path: &Path) -> Result<ProjectConfig> {
-    let mut file = File::open(path).with_context(|| format!("failed to open config: {}", path.display()))?;
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open config: {}", path.display()))?;
     let mut raw = String::new();
     file.read_to_string(&mut raw)?;
     let mut stripped = String::new();
@@ -168,7 +177,16 @@ fn load_specific_config(path: &Path) -> Result<ProjectConfig> {
 
 pub fn normalize_rel(project_root: &Path, path: &Path) -> String {
     let relative = path.strip_prefix(project_root).unwrap_or(path);
-    relative.to_string_lossy().replace('\\', "/")
+    relative
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy().to_string()),
+            Component::CurDir => None,
+            Component::ParentDir => Some("..".to_string()),
+            Component::RootDir | Component::Prefix(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]
@@ -192,7 +210,6 @@ mod tests {
               "layers": {
                 "astClones": false,
                 "simhashClones": false,
-                "semanticClones": true,
                 "typeShapes": false,
                 "symbolGraph": false,
                 "apiDrift": false,
@@ -203,8 +220,6 @@ mod tests {
                 "minCloneTokens": 41,
                 "minCloneStatements": 5,
                 "simhashHammingRadius": 9,
-                "semanticCloneCosine": 0.91,
-                "semanticCandidateK": 7,
                 "maxFindings": 13,
                 "typeShapeMinMembers": 6,
                 "sessionConflictOverlap": 0.42,
@@ -225,12 +240,13 @@ mod tests {
         assert_eq!(config.entrypoints, vec!["src/main.ts"]);
         assert_eq!(config.package_boundaries.len(), 1);
         assert_eq!(config.package_boundaries[0].root, "packages/*");
-        assert_eq!(config.package_boundaries[0].kind.as_deref(), Some("workspace"));
+        assert_eq!(
+            config.package_boundaries[0].kind.as_deref(),
+            Some("workspace")
+        );
         assert!(!config.layers.ast_clones);
-        assert!(config.layers.semantic_clones);
         assert_eq!(config.thresholds.min_clone_tokens, 41);
         assert_eq!(config.thresholds.simhash_hamming_radius, 9);
-        assert_eq!(config.thresholds.semantic_candidate_k, 7);
         assert!(!config.telemetry.enabled);
         assert_eq!(config.telemetry.retain_days, 3);
         assert_eq!(config.max_findings, 13);
@@ -242,9 +258,19 @@ mod tests {
     fn default_ignore_skips_nested_dependency_and_opencode_state_dirs() {
         let config = super::ProjectConfig::default();
 
-        assert!(config.ignore.iter().any(|pattern| pattern == "**/node_modules/**"));
+        assert!(
+            config
+                .ignore
+                .iter()
+                .any(|pattern| pattern == "**/node_modules/**")
+        );
         assert!(config.ignore.iter().any(|pattern| pattern == "**/dist/**"));
-        assert!(config.ignore.iter().any(|pattern| pattern == ".opencode/**"));
+        assert!(
+            config
+                .ignore
+                .iter()
+                .any(|pattern| pattern == ".opencode/**")
+        );
     }
 
     fn temp_config_path(name: &str) -> PathBuf {
@@ -252,7 +278,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("codemem-{name}-{}-{unique}.jsonc", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "codemem-{name}-{}-{unique}.jsonc",
+            std::process::id()
+        ))
     }
 }
-

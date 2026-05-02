@@ -11,6 +11,16 @@ export type FindingKind =
   | "dead_code"
   | "cycle"
   | "session_conflict";
+export type ChangeRiskLevel = "low" | "medium" | "high";
+export type ChangeRiskReasonKind =
+  | "dependency_cone"
+  | "reverse_dependents"
+  | "public_exports"
+  | "api_drift"
+  | "cycles"
+  | "session_conflicts"
+  | "dynamic_imports"
+  | "nearby_findings";
 
 export type Span = {
   startLine: number;
@@ -35,7 +45,29 @@ export type FindingEvidence = {
   score?: number;
 };
 
+export type ChangeRiskReason = {
+  kind: ChangeRiskReasonKind;
+  severity: Severity;
+  score: number;
+  detail: string;
+  files: string[];
+  symbols: string[];
+  findingIds: string[];
+};
+
+export type ChangeRiskFocusItem = {
+  target: string;
+  targetKind: "file" | "symbol";
+  severity: Severity;
+  confidence: number;
+  score: number;
+  reasons: ChangeRiskReasonKind[];
+  evidence: FindingEvidence[];
+  findingIds: string[];
+};
+
 export type BaseFinding = {
+  id: string;
   kind: FindingKind;
   severity: Severity;
   confidence: number;
@@ -223,12 +255,88 @@ export type RebuildResponse = {
   reason: string;
 };
 
+export type ImpactConeRequest = {
+  projectRoot: string;
+  path: string;
+  depth: number;
+};
+
+export type ImpactConeResponse = {
+  path: string;
+  depth: number;
+  files: string[];
+  indexedAtUnixMs: number;
+};
+
+export type ChangeRiskRequest = {
+  projectRoot: string;
+  paths: string[];
+  depth: number;
+  maxFindings: number;
+  sessionID?: string;
+};
+
+export type ChangeRiskResponse = {
+  score: number;
+  level: ChangeRiskLevel;
+  paths: string[];
+  depth: number;
+  reasons: ChangeRiskReason[];
+  impactedFiles: string[];
+  focus: ChangeRiskFocusItem[];
+  indexedAtUnixMs: number;
+  stats: {
+    impactedFiles: number;
+    reverseDependents: number;
+    publicExports: number;
+    findings: number;
+    sessionConflicts: number;
+  };
+};
+
+export type ApiSurfaceRequest = {
+  projectRoot: string;
+  maxExports: number;
+};
+
+export type ApiSurfaceResponse = {
+  exports: Array<{ exportName: string; sourceFile: string; signature: string }>;
+  total: number;
+  truncated: boolean;
+  indexedAtUnixMs: number;
+};
+
+export type LayerBoundariesRequest = {
+  projectRoot: string;
+  maxFindings: number;
+};
+
+export type LayerBoundariesResponse = {
+  boundaries: Array<{ root: string; name?: string; kind?: string }>;
+  cycles: CodeMemFinding[];
+  indexedAtUnixMs: number;
+};
+
+export type LockfileRequest = {
+  projectRoot: string;
+};
+
+export type LockfileResponse = {
+  lockfiles: Array<{ path: string; digest: string; sizeBytes: number }>;
+  indexedAtUnixMs: number;
+};
+
 export type RpcMethodMap = {
   health: { params: HealthRequest; result: HealthResponse };
   "project.filesChanged": { params: FilesChangedNotification; result: { accepted: boolean } };
   "analysis.check": { params: CheckRequest; result: CheckResponse };
   "analysis.driftMap": { params: DriftMapRequest; result: DriftMapResponse };
   "analysis.conflicts": { params: ConflictsRequest; result: ConflictsResponse };
+  "analysis.impactCone": { params: ImpactConeRequest; result: ImpactConeResponse };
+  "analysis.changeRisk": { params: ChangeRiskRequest; result: ChangeRiskResponse };
+  "analysis.apiSurface": { params: ApiSurfaceRequest; result: ApiSurfaceResponse };
+  "analysis.layerBoundaries": { params: LayerBoundariesRequest; result: LayerBoundariesResponse };
+  "analysis.lockfile": { params: LockfileRequest; result: LockfileResponse };
   "maintenance.status": { params: StatusRequest; result: StatusResponse };
   "maintenance.maintain": { params: MaintainRequest; result: MaintainResponse };
   "maintenance.rebuild": { params: RebuildRequest; result: RebuildResponse };

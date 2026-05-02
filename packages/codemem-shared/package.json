@@ -17,9 +17,21 @@
       "types": "./dist/config.d.ts",
       "default": "./dist/config.js"
     },
+    "./baseline": {
+      "types": "./dist/baseline.d.ts",
+      "default": "./dist/baseline.js"
+    },
+    "./artifacts": {
+      "types": "./dist/artifacts.d.ts",
+      "default": "./dist/artifacts.js"
+    },
     "./protocol": {
       "types": "./dist/protocol.d.ts",
       "default": "./dist/protocol.js"
+    },
+    "./report": {
+      "types": "./dist/report.d.ts",
+      "default": "./dist/report.js"
     }
   }
 }

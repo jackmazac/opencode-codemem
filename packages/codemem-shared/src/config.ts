@@ -5,7 +5,6 @@ import type { Severity } from "./protocol";
 export type CodeMemLayerToggles = {
   astClones: boolean;
   simhashClones: boolean;
-  semanticClones: boolean;
   typeShapes: boolean;
   symbolGraph: boolean;
   apiDrift: boolean;
@@ -17,22 +16,11 @@ export type CodeMemThresholds = {
   minCloneTokens: number;
   minCloneStatements: number;
   simhashHammingRadius: number;
-  semanticCloneCosine: number;
-  semanticCandidateK: number;
   maxFindings: number;
   typeShapeMinMembers: number;
   sessionConflictOverlap: number;
   sessionConflictDecayMs: number;
   promptInjectionMinConfidence: number;
-};
-
-export type EmbeddingConfig = {
-  enabled: boolean;
-  provider: "local" | "cloud";
-  model: string;
-  inference: "disabled" | "onnx" | "llama.cpp" | "candle" | "remote";
-  cacheDirectory?: string;
-  maxTokens: number;
 };
 
 export type TelemetryConfig = {
@@ -72,7 +60,6 @@ export type CodeMemConfig = {
   packageBoundaries: PackageBoundary[];
   layers: CodeMemLayerToggles;
   thresholds: CodeMemThresholds;
-  embedding: EmbeddingConfig;
   daemon: DaemonConfig;
   telemetry: TelemetryConfig;
   promptInjection: PromptInjectionPolicy;
@@ -104,7 +91,6 @@ const DEFAULT_CONFIG: CodeMemConfig = {
   layers: {
     astClones: true,
     simhashClones: true,
-    semanticClones: false,
     typeShapes: true,
     symbolGraph: true,
     apiDrift: true,
@@ -115,20 +101,11 @@ const DEFAULT_CONFIG: CodeMemConfig = {
     minCloneTokens: 24,
     minCloneStatements: 3,
     simhashHammingRadius: 6,
-    semanticCloneCosine: 0.88,
-    semanticCandidateK: 16,
     maxFindings: 50,
     typeShapeMinMembers: 3,
     sessionConflictOverlap: 0.25,
     sessionConflictDecayMs: 15 * 60 * 1000,
     promptInjectionMinConfidence: 0.8,
-  },
-  embedding: {
-    enabled: false,
-    provider: "local",
-    model: "jinaai/jina-code-embeddings-0.5b",
-    inference: "disabled",
-    maxTokens: 2048,
   },
   daemon: {
     maxPayloadBytes: 4 * 1024 * 1024,
@@ -166,7 +143,7 @@ export async function loadCodeMemConfig(
   const merged = mergeConfig(DEFAULT_CONFIG, parsed as Partial<CodeMemConfig>);
   return {
     path: configPath,
-    config: normalizeConfig(projectRoot, merged),
+    config: normalizeConfig(merged),
   };
 }
 
@@ -215,7 +192,7 @@ export function normalizeProjectPath(projectRoot: string, candidate: string): st
   return path.normalize(path.join(projectRoot, candidate));
 }
 
-export function normalizeConfig(projectRoot: string, config: CodeMemConfig): CodeMemConfig {
+export function normalizeConfig(config: CodeMemConfig): CodeMemConfig {
   const normalized: CodeMemConfig = structuredClone(config);
   normalized.entrypoints = dedupe(normalized.entrypoints.map((entry) => toPortablePath(entry)));
   normalized.ignore = dedupe(normalized.ignore.map((glob) => glob.trim()).filter(Boolean));
@@ -229,10 +206,6 @@ export function normalizeConfig(projectRoot: string, config: CodeMemConfig): Cod
     normalized.maxFindings = DEFAULT_CONFIG.maxFindings;
   }
   normalized.thresholds.maxFindings = Math.max(1, normalized.thresholds.maxFindings);
-
-  if (normalized.embedding.cacheDirectory) {
-    normalized.embedding.cacheDirectory = path.resolve(projectRoot, normalized.embedding.cacheDirectory);
-  }
 
   return normalized;
 }
@@ -322,7 +295,6 @@ function mergeConfig(base: CodeMemConfig, next: Partial<CodeMemConfig>): CodeMem
 
   if (next.layers) merged.layers = { ...merged.layers, ...next.layers };
   if (next.thresholds) merged.thresholds = { ...merged.thresholds, ...next.thresholds };
-  if (next.embedding) merged.embedding = { ...merged.embedding, ...next.embedding };
   if (next.daemon) merged.daemon = { ...merged.daemon, ...next.daemon };
   if (next.telemetry) merged.telemetry = { ...merged.telemetry, ...next.telemetry };
   if (next.promptInjection) {

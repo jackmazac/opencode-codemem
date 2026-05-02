@@ -98,7 +98,6 @@ function testConfig(): CodeMemConfig {
     layers: {
       astClones: true,
       simhashClones: true,
-      semanticClones: false,
       typeShapes: true,
       symbolGraph: true,
       apiDrift: true,
@@ -109,20 +108,11 @@ function testConfig(): CodeMemConfig {
       minCloneTokens: 24,
       minCloneStatements: 3,
       simhashHammingRadius: 6,
-      semanticCloneCosine: 0.88,
-      semanticCandidateK: 16,
       maxFindings: 50,
       typeShapeMinMembers: 3,
       sessionConflictOverlap: 0.25,
       sessionConflictDecayMs: 900000,
       promptInjectionMinConfidence: 0.8,
-    },
-    embedding: {
-      enabled: false,
-      provider: "local",
-      model: "test",
-      inference: "disabled",
-      maxTokens: 2048,
     },
     daemon: {
       maxPayloadBytes: 4194304,

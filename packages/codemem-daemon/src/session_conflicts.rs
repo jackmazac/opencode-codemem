@@ -6,7 +6,10 @@ use crate::{
 use anyhow::Result;
 use chrono::Utc;
 use parking_lot::Mutex;
-use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 pub struct SessionConflictTracker {
     decay_ms: i64,
@@ -29,7 +32,12 @@ impl SessionConflictTracker {
         }
     }
 
-    pub fn observe(&self, session_id: &str, touched_files: Vec<String>, graph: &ModuleGraph) -> Result<()> {
+    pub fn observe(
+        &self,
+        session_id: &str,
+        touched_files: Vec<String>,
+        graph: &ModuleGraph,
+    ) -> Result<()> {
         if session_id.trim().is_empty() {
             return Ok(());
         }
@@ -122,7 +130,11 @@ impl SessionConflictTracker {
                     .touched_files
                     .iter()
                     .any(|file| right.touched_files.iter().any(|other| other == file));
-                let severity = if direct_touch { Severity::Error } else { Severity::Warn };
+                let severity = if direct_touch {
+                    Severity::Error
+                } else {
+                    Severity::Warn
+                };
                 findings.push(Finding::SessionConflict {
                     severity,
                     confidence: coefficient.min(0.99),

@@ -1,11 +1,18 @@
 declare namespace NodeJS {
-  interface Timeout {}
+  type Timeout = number;
   interface Process {
+    argv: string[];
     env: Record<string, string | undefined>;
     platform: string;
     arch: string;
+    cwd(): string;
+    exit(code?: number): never;
     kill(pid: number, signal?: number | string): void;
   }
+}
+
+interface ImportMeta {
+  main?: boolean;
 }
 
 declare const process: NodeJS.Process;
@@ -37,6 +44,7 @@ declare module "node:fs/promises" {
   export type Stats = { isFile(): boolean; isDirectory(): boolean };
   export function readFile(path: string, encoding: string): Promise<string>;
   export function writeFile(path: string, data: string, options?: { mode?: number }): Promise<void>;
+  export function appendFile(path: string, data: string): Promise<void>;
   export function stat(path: string): Promise<Stats>;
   export function rm(path: string, options?: { force?: boolean; recursive?: boolean }): Promise<void>;
   export function mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
@@ -66,11 +74,14 @@ declare module "node:url" {
 }
 
 declare module "node:events" {
-  export function once(emitter: { once(event: string, cb: (...args: any[]) => void): void }, event: string): Promise<any[]>;
+  export function once(
+    emitter: { once(event: string, cb: (...args: unknown[]) => void): void },
+    event: string,
+  ): Promise<unknown[]>;
 }
 
 declare module "node:net" {
-  interface Socket {
+  export interface Socket {
     once(event: "connect", cb: () => void): this;
     once(event: "error", cb: (error: Error) => void): this;
     once(event: "close", cb: (hadError: boolean) => void): this;
@@ -86,4 +97,14 @@ declare module "node:net" {
 }
 
 
-declare const Bun: any;
+declare const Bun: {
+  spawn(options: {
+    cmd: string[];
+    cwd: string;
+    env: Record<string, string | undefined>;
+    detached: boolean;
+    stdin: "ignore";
+    stdout: "ignore";
+    stderr: "ignore";
+  }): { pid: number };
+};

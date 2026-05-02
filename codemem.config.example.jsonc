@@ -27,7 +27,6 @@
   "layers": {
     "astClones": true,
     "simhashClones": true,
-    "semanticClones": false,
     "typeShapes": true,
     "symbolGraph": true,
     "apiDrift": true,
@@ -39,22 +38,11 @@
     "minCloneTokens": 24,
     "minCloneStatements": 3,
     "simhashHammingRadius": 6,
-    "semanticCloneCosine": 0.88,
-    "semanticCandidateK": 16,
     "maxFindings": 50,
     "typeShapeMinMembers": 3,
     "sessionConflictOverlap": 0.25,
     "sessionConflictDecayMs": 900000,
     "promptInjectionMinConfidence": 0.8
-  },
-
-  "embedding": {
-    "enabled": false,
-    "provider": "local",
-    "model": "jinaai/jina-code-embeddings-0.5b",
-    "inference": "disabled",
-    "cacheDirectory": ".git/codemem/models",
-    "maxTokens": 2048
   },
 
   "daemon": {

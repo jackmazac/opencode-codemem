@@ -1,11 +1,15 @@
 use crate::{
     config::ProjectConfig,
-    indexer::{CheckSummary, ConflictSummary, DriftMapSummary, Indexer, MaintainSummary, RebuildSummary},
+    indexer::{
+        ApiSurfaceSummary, ChangeRiskSummary, CheckSummary, ConflictSummary, DriftMapSummary,
+        ImpactConeSummary, Indexer, LayerBoundarySummary, LockfileSummary, MaintainSummary,
+        RebuildSummary,
+    },
     model::{DriftMap, Evidence, Finding, Severity, StoreStats},
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -67,9 +71,11 @@ struct HealthParams {
 #[serde(rename_all = "camelCase")]
 struct FilesChangedParams {
     project_root: String,
+    #[serde(rename = "sessionID")]
     session_id: String,
     files: Vec<String>,
     reason: String,
+    #[serde(rename = "turnID")]
     turn_id: Option<String>,
     observed_at_unix_ms: i64,
 }
@@ -78,6 +84,7 @@ struct FilesChangedParams {
 #[serde(rename_all = "camelCase")]
 struct CheckParams {
     project_root: String,
+    #[serde(rename = "sessionID")]
     session_id: Option<String>,
     paths: Option<Vec<String>>,
     max_findings: usize,
@@ -89,6 +96,7 @@ struct CheckParams {
 #[serde(rename_all = "camelCase")]
 struct DriftMapParams {
     project_root: String,
+    #[serde(rename = "sessionID")]
     session_id: Option<String>,
     max_findings: usize,
 }
@@ -97,7 +105,47 @@ struct DriftMapParams {
 #[serde(rename_all = "camelCase")]
 struct ConflictsParams {
     project_root: String,
+    #[serde(rename = "sessionID")]
     session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImpactConeParams {
+    project_root: String,
+    path: String,
+    depth: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChangeRiskParams {
+    project_root: String,
+    paths: Vec<String>,
+    depth: usize,
+    max_findings: usize,
+    #[serde(rename = "sessionID")]
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiSurfaceParams {
+    project_root: String,
+    max_exports: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LayerBoundariesParams {
+    project_root: String,
+    max_findings: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LockfileParams {
+    project_root: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,7 +174,9 @@ pub async fn serve(ctx: Arc<RpcContext>) -> Result<()> {
         return serve_windows(ctx).await;
     }
     #[allow(unreachable_code)]
-    Err(anyhow::anyhow!("unsupported platform for codemem local RPC"))
+    Err(anyhow::anyhow!(
+        "unsupported platform for codemem local RPC"
+    ))
 }
 
 #[cfg(unix)]
@@ -179,7 +229,14 @@ where
             Ok(Some(bytes)) => bytes,
             Ok(None) => return Ok(()),
             Err(error) => {
-                let response = response_error(None, ctx.protocol_version, "invalid_frame", &error.to_string(), true, None);
+                let response = response_error(
+                    None,
+                    ctx.protocol_version,
+                    "invalid_frame",
+                    &error.to_string(),
+                    true,
+                    None,
+                );
                 let _ = write_response(&mut stream, &response).await;
                 return Err(error);
             }
@@ -188,7 +245,14 @@ where
         let envelope: RequestEnvelope = match serde_json::from_slice(&request) {
             Ok(envelope) => envelope,
             Err(error) => {
-                let response = response_error(None, ctx.protocol_version, "invalid_json", &error.to_string(), false, None);
+                let response = response_error(
+                    None,
+                    ctx.protocol_version,
+                    "invalid_json",
+                    &error.to_string(),
+                    false,
+                    None,
+                );
                 write_response(&mut stream, &response).await?;
                 continue;
             }
@@ -215,7 +279,9 @@ where
     }
     let length = u32::from_be_bytes(length_prefix) as usize;
     if length > max_payload_bytes.max(4 * 1024 * 1024) {
-        return Err(anyhow::anyhow!("frame exceeds codemem limit ({length} bytes)"));
+        return Err(anyhow::anyhow!(
+            "frame exceeds codemem limit ({length} bytes)"
+        ));
     }
     let mut payload = vec![0u8; length];
     stream.read_exact(&mut payload).await?;
@@ -254,7 +320,14 @@ async fn dispatch_inner(
     envelope: &RequestEnvelope,
 ) -> std::result::Result<Value, ResponseEnvelope> {
     if envelope.jsonrpc != "2.0" {
-        return Err(response_error(envelope.id.clone(), ctx.protocol_version, "invalid_jsonrpc", "expected jsonrpc=2.0", false, None));
+        return Err(response_error(
+            envelope.id.clone(),
+            ctx.protocol_version,
+            "invalid_jsonrpc",
+            "expected jsonrpc=2.0",
+            false,
+            None,
+        ));
     }
     if envelope.protocol_version != ctx.protocol_version {
         return Err(response_error(
@@ -266,39 +339,80 @@ async fn dispatch_inner(
                 envelope.protocol_version, ctx.protocol_version
             ),
             false,
-            Some(json!({ "expected": ctx.protocol_version, "received": envelope.protocol_version })),
+            Some(
+                json!({ "expected": ctx.protocol_version, "received": envelope.protocol_version }),
+            ),
         ));
     }
     if let Some(expected) = &ctx.auth_token {
         if envelope.auth_token.as_deref() != Some(expected.as_str()) {
-            return Err(response_error(envelope.id.clone(), ctx.protocol_version, "unauthorized", "invalid auth token", false, None));
+            return Err(response_error(
+                envelope.id.clone(),
+                ctx.protocol_version,
+                "unauthorized",
+                "invalid auth token",
+                false,
+                None,
+            ));
         }
     }
 
     match envelope.method.as_str() {
         "health" => {
-            let params = deserialize_params::<HealthParams>(&envelope.params, envelope.id.clone(), ctx.protocol_version)?;
-            validate_project_root(&ctx.project_root, &params.project_root, envelope.id.clone(), ctx.protocol_version)?;
-            let stats = ctx
-                .indexer
-                .store_stats()
-                .map_err(|error| response_from_error(envelope.id.clone(), ctx.protocol_version, error))?;
+            let params = deserialize_params::<HealthParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            let stats = ctx.indexer.store_stats().map_err(|error| {
+                response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+            })?;
             Ok(json_health(ctx, &stats))
         }
         "project.filesChanged" => {
-            let params = deserialize_params::<FilesChangedParams>(&envelope.params, envelope.id.clone(), ctx.protocol_version)?;
-            validate_project_root(&ctx.project_root, &params.project_root, envelope.id.clone(), ctx.protocol_version)?;
+            let params = deserialize_params::<FilesChangedParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
             let _ = &params.turn_id;
             let _ = params.observed_at_unix_ms;
             ctx.indexer
-                .enqueue_files(params.session_id.clone(), params.files.clone(), params.reason.clone())
+                .enqueue_files(
+                    params.session_id.clone(),
+                    params.files.clone(),
+                    params.reason.clone(),
+                )
                 .await
-                .map_err(|error| response_from_error(envelope.id.clone(), ctx.protocol_version, error))?;
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
             Ok(json!({ "accepted": true }))
         }
         "analysis.check" => {
-            let params = deserialize_params::<CheckParams>(&envelope.params, envelope.id.clone(), ctx.protocol_version)?;
-            validate_project_root(&ctx.project_root, &params.project_root, envelope.id.clone(), ctx.protocol_version)?;
+            let params = deserialize_params::<CheckParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
             let summary = ctx
                 .indexer
                 .check(
@@ -308,12 +422,23 @@ async fn dispatch_inner(
                     params.wait_for_fresh_index,
                 )
                 .await
-                .map_err(|error| response_from_error(envelope.id.clone(), ctx.protocol_version, error))?;
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
             Ok(json_check(summary, params.include_evidence))
         }
         "analysis.driftMap" => {
-            let params = deserialize_params::<DriftMapParams>(&envelope.params, envelope.id.clone(), ctx.protocol_version)?;
-            validate_project_root(&ctx.project_root, &params.project_root, envelope.id.clone(), ctx.protocol_version)?;
+            let params = deserialize_params::<DriftMapParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
             let summary = ctx
                 .indexer
                 .drift_map(
@@ -321,26 +446,149 @@ async fn dispatch_inner(
                     normalize_max_findings(params.max_findings, &ctx.config),
                 )
                 .await
-                .map_err(|error| response_from_error(envelope.id.clone(), ctx.protocol_version, error))?;
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
             Ok(json_drift_map(summary))
         }
         "analysis.conflicts" => {
-            let params = deserialize_params::<ConflictsParams>(&envelope.params, envelope.id.clone(), ctx.protocol_version)?;
-            validate_project_root(&ctx.project_root, &params.project_root, envelope.id.clone(), ctx.protocol_version)?;
+            let params = deserialize_params::<ConflictsParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
             let summary = ctx
                 .indexer
                 .conflicts(params.session_id.as_deref(), ctx.config.max_findings)
                 .await
-                .map_err(|error| response_from_error(envelope.id.clone(), ctx.protocol_version, error))?;
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
             Ok(json_conflicts(summary))
         }
-        "maintenance.status" => {
-            let params = deserialize_params::<HealthParams>(&envelope.params, envelope.id.clone(), ctx.protocol_version)?;
-            validate_project_root(&ctx.project_root, &params.project_root, envelope.id.clone(), ctx.protocol_version)?;
-            let stats = ctx
+        "analysis.impactCone" => {
+            let params = deserialize_params::<ImpactConeParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            let summary = ctx
                 .indexer
-                .store_stats()
-                .map_err(|error| response_from_error(envelope.id.clone(), ctx.protocol_version, error))?;
+                .impact_cone(&params.path, params.depth)
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
+            Ok(json_impact_cone(summary))
+        }
+        "analysis.changeRisk" => {
+            let params = deserialize_params::<ChangeRiskParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            let summary = ctx
+                .indexer
+                .change_risk(
+                    params.paths,
+                    params.depth,
+                    params.session_id.as_deref(),
+                    normalize_max_findings(params.max_findings, &ctx.config),
+                )
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
+            Ok(json_change_risk(summary))
+        }
+        "analysis.apiSurface" => {
+            let params = deserialize_params::<ApiSurfaceParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            let summary = ctx
+                .indexer
+                .api_surface(params.max_exports)
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
+            Ok(json_api_surface(summary))
+        }
+        "analysis.layerBoundaries" => {
+            let params = deserialize_params::<LayerBoundariesParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            let summary = ctx
+                .indexer
+                .layer_boundaries(normalize_max_findings(params.max_findings, &ctx.config))
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
+            Ok(json_layer_boundaries(summary))
+        }
+        "analysis.lockfile" => {
+            let params = deserialize_params::<LockfileParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            let summary = ctx.indexer.lockfiles().map_err(|error| {
+                response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+            })?;
+            Ok(json_lockfile(summary))
+        }
+        "maintenance.status" => {
+            let params = deserialize_params::<HealthParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            let stats = ctx.indexer.store_stats().map_err(|error| {
+                response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+            })?;
             Ok(json!({
                 "health": json_health(ctx, &stats),
                 "stateDirectory": ctx.state_dir.to_string_lossy(),
@@ -348,22 +596,44 @@ async fn dispatch_inner(
             }))
         }
         "maintenance.maintain" => {
-            let params = deserialize_params::<MaintainParams>(&envelope.params, envelope.id.clone(), ctx.protocol_version)?;
-            validate_project_root(&ctx.project_root, &params.project_root, envelope.id.clone(), ctx.protocol_version)?;
+            let params = deserialize_params::<MaintainParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
             let summary = ctx
                 .indexer
-                .maintain(params.dry_run, params.prune_logs.unwrap_or(false), params.compact.unwrap_or(false))
-                .map_err(|error| response_from_error(envelope.id.clone(), ctx.protocol_version, error))?;
+                .maintain(
+                    params.dry_run,
+                    params.prune_logs.unwrap_or(false),
+                    params.compact.unwrap_or(false),
+                )
+                .map_err(|error| {
+                    response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+                })?;
             Ok(json_maintain(summary))
         }
         "maintenance.rebuild" => {
-            let params = deserialize_params::<RebuildParams>(&envelope.params, envelope.id.clone(), ctx.protocol_version)?;
-            validate_project_root(&ctx.project_root, &params.project_root, envelope.id.clone(), ctx.protocol_version)?;
-            let summary = ctx
-                .indexer
-                .rebuild(params.dry_run)
-                .await
-                .map_err(|error| response_from_error(envelope.id.clone(), ctx.protocol_version, error))?;
+            let params = deserialize_params::<RebuildParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            let summary = ctx.indexer.rebuild(params.dry_run).await.map_err(|error| {
+                response_from_error(envelope.id.clone(), ctx.protocol_version, error)
+            })?;
             Ok(json_rebuild(summary))
         }
         _ => Err(response_error(
@@ -418,12 +688,27 @@ fn validate_project_root(
 }
 
 fn normalize_max_findings(value: usize, config: &ProjectConfig) -> usize {
-    let requested = if value == 0 { config.max_findings } else { value };
+    let requested = if value == 0 {
+        config.max_findings
+    } else {
+        value
+    };
     requested.min(config.max_findings.max(1)).max(1)
 }
 
-fn response_from_error(id: Option<String>, protocol_version: u32, error: anyhow::Error) -> ResponseEnvelope {
-    response_error(id, protocol_version, "internal_error", &error.to_string(), true, None)
+fn response_from_error(
+    id: Option<String>,
+    protocol_version: u32,
+    error: anyhow::Error,
+) -> ResponseEnvelope {
+    response_error(
+        id,
+        protocol_version,
+        "internal_error",
+        &error.to_string(),
+        true,
+        None,
+    )
 }
 
 fn response_error(
@@ -491,6 +776,88 @@ fn json_conflicts(summary: ConflictSummary) -> Value {
     })
 }
 
+fn json_impact_cone(summary: ImpactConeSummary) -> Value {
+    json!({
+        "path": summary.path,
+        "depth": summary.depth,
+        "files": summary.files,
+        "indexedAtUnixMs": summary.indexed_at_ms,
+    })
+}
+
+fn json_change_risk(summary: ChangeRiskSummary) -> Value {
+    json!({
+        "score": summary.score,
+        "level": summary.level,
+        "paths": summary.paths,
+        "depth": summary.depth,
+        "reasons": summary.reasons.into_iter().map(|reason| json!({
+            "kind": reason.kind,
+            "severity": severity_to_str(reason.severity),
+            "score": reason.score,
+            "detail": reason.detail,
+            "files": reason.files,
+            "symbols": reason.symbols,
+            "findingIds": reason.finding_ids,
+        })).collect::<Vec<_>>(),
+        "impactedFiles": summary.impacted_files,
+        "focus": summary.focus.into_iter().map(|item| json!({
+            "target": item.target,
+            "targetKind": item.target_kind,
+            "severity": severity_to_str(item.severity),
+            "confidence": item.confidence,
+            "score": item.score,
+            "reasons": item.reasons,
+            "evidence": evidence_to_value(item.evidence, true),
+            "findingIds": item.finding_ids,
+        })).collect::<Vec<_>>(),
+        "indexedAtUnixMs": summary.indexed_at_ms,
+        "stats": {
+            "impactedFiles": summary.stats.impacted_files,
+            "reverseDependents": summary.stats.reverse_dependents,
+            "publicExports": summary.stats.public_exports,
+            "findings": summary.stats.findings,
+            "sessionConflicts": summary.stats.session_conflicts,
+        },
+    })
+}
+
+fn json_api_surface(summary: ApiSurfaceSummary) -> Value {
+    json!({
+        "exports": summary.exports.into_iter().map(|export| json!({
+            "exportName": export.export_name,
+            "sourceFile": export.source_file,
+            "signature": export.signature,
+        })).collect::<Vec<_>>(),
+        "total": summary.total,
+        "truncated": summary.truncated,
+        "indexedAtUnixMs": summary.indexed_at_ms,
+    })
+}
+
+fn json_layer_boundaries(summary: LayerBoundarySummary) -> Value {
+    json!({
+        "boundaries": summary.boundaries.into_iter().map(|boundary| json!({
+            "root": boundary.root,
+            "name": boundary.name,
+            "kind": boundary.kind,
+        })).collect::<Vec<_>>(),
+        "cycles": summary.cycles.into_iter().map(|finding| finding_to_value(finding, true)).collect::<Vec<_>>(),
+        "indexedAtUnixMs": summary.indexed_at_ms,
+    })
+}
+
+fn json_lockfile(summary: LockfileSummary) -> Value {
+    json!({
+        "lockfiles": summary.lockfiles.into_iter().map(|lockfile| json!({
+            "path": lockfile.path,
+            "digest": lockfile.digest,
+            "sizeBytes": lockfile.size_bytes,
+        })).collect::<Vec<_>>(),
+        "indexedAtUnixMs": summary.indexed_at_ms,
+    })
+}
+
 fn json_maintain(summary: MaintainSummary) -> Value {
     json!({
         "actions": summary.actions.into_iter().map(|action| json!({
@@ -528,6 +895,7 @@ fn drift_map_to_value(map: DriftMap) -> Value {
 }
 
 fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
+    let id = finding.stable_key();
     match finding {
         Finding::SemanticClone {
             severity,
@@ -540,6 +908,7 @@ fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
             detector,
             recommendation,
         } => json!({
+            "id": id,
             "kind": "semantic_clone",
             "severity": severity_to_str(severity),
             "confidence": confidence,
@@ -560,6 +929,7 @@ fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
             shape_hash,
             recommendation,
         } => json!({
+            "id": id,
             "kind": "type_shape_duplicate",
             "severity": severity_to_str(severity),
             "confidence": confidence,
@@ -580,6 +950,7 @@ fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
             after,
             affected_callers,
         } => json!({
+            "id": id,
             "kind": "api_drift",
             "severity": severity_to_str(severity),
             "confidence": confidence,
@@ -601,6 +972,7 @@ fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
             reason,
             dynamic_import_risk,
         } => json!({
+            "id": id,
             "kind": "dead_code",
             "severity": severity_to_str(severity),
             "confidence": confidence,
@@ -619,6 +991,7 @@ fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
             nodes,
             package_level,
         } => json!({
+            "id": id,
             "kind": "cycle",
             "severity": severity_to_str(severity),
             "confidence": confidence,
@@ -635,6 +1008,7 @@ fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
             sessions,
             touched_cone,
         } => json!({
+            "id": id,
             "kind": "session_conflict",
             "severity": severity_to_str(severity),
             "confidence": confidence,
@@ -648,10 +1022,14 @@ fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch, RequestEnvelope, RpcContext};
+    use super::{
+        ChangeRiskParams, FilesChangedParams, RequestEnvelope, RpcContext, deserialize_params,
+        dispatch, finding_to_value,
+    };
     use crate::{
         config::ProjectConfig,
         indexer::Indexer,
+        model::{Evidence, Finding, Severity},
         session_conflicts::SessionConflictTracker,
         store::Store,
     };
@@ -702,7 +1080,75 @@ mod tests {
 
         let error = response.error.expect("error response");
         assert_eq!(error.code, "protocol_mismatch");
-        assert_eq!(error.details.expect("details")["expected"], ctx.protocol_version);
+        assert_eq!(
+            error.details.expect("details")["expected"],
+            ctx.protocol_version
+        );
+    }
+
+    #[test]
+    fn files_changed_params_accept_opencode_session_id_casing() {
+        let params = deserialize_params::<FilesChangedParams>(
+            &json!({
+                "projectRoot": "/tmp/project",
+                "sessionID": "session-a",
+                "files": ["src/index.ts"],
+                "reason": "tool",
+                "turnID": "turn-7",
+                "observedAtUnixMs": 1234
+            }),
+            None,
+            1,
+        )
+        .expect("deserialize params");
+
+        assert_eq!(params.session_id, "session-a");
+        assert_eq!(params.turn_id.as_deref(), Some("turn-7"));
+    }
+
+    #[test]
+    fn change_risk_params_accept_opencode_session_id_casing() {
+        let params = deserialize_params::<ChangeRiskParams>(
+            &json!({
+                "projectRoot": "/tmp/project",
+                "paths": ["src/index.ts"],
+                "depth": 2,
+                "maxFindings": 25,
+                "sessionID": "session-a"
+            }),
+            None,
+            1,
+        )
+        .expect("deserialize params");
+
+        assert_eq!(params.session_id.as_deref(), Some("session-a"));
+        assert_eq!(params.paths, vec!["src/index.ts"]);
+    }
+
+    #[test]
+    fn serialized_findings_include_stable_id() {
+        let value = finding_to_value(
+            Finding::DeadCode {
+                severity: Severity::Warn,
+                confidence: 0.8,
+                evidence: vec![Evidence {
+                    kind: "span".into(),
+                    file: Some("src/index.ts".into()),
+                    symbol: Some("unused".into()),
+                    span: None,
+                    detail: "symbol is unreachable".into(),
+                    score: None,
+                }],
+                action: "Remove the symbol or add an entrypoint.".into(),
+                symbol: "unused".into(),
+                file: "src/index.ts".into(),
+                reason: "not reachable from entrypoints".into(),
+                dynamic_import_risk: false,
+            },
+            true,
+        );
+
+        assert_eq!(value["id"], "dead:src/index.ts:unused");
     }
 
     fn test_context(name: &str, auth_token: Option<String>) -> Arc<RpcContext> {
@@ -743,7 +1189,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("codemem-rpc-{name}-{}-{unique}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "codemem-rpc-{name}-{}-{unique}",
+            std::process::id()
+        ))
     }
 }
 
@@ -751,22 +1200,24 @@ fn evidence_to_value(evidence: Vec<Evidence>, include_evidence: bool) -> Value {
     if !include_evidence {
         return json!([]);
     }
-    json!(evidence
-        .into_iter()
-        .map(|evidence| json!({
-            "kind": evidence.kind,
-            "file": evidence.file,
-            "symbol": evidence.symbol,
-            "span": evidence.span.map(|span| json!({
-                "startLine": span.start_line,
-                "startColumn": span.start_column,
-                "endLine": span.end_line,
-                "endColumn": span.end_column,
-            })),
-            "detail": evidence.detail,
-            "score": evidence.score,
-        }))
-        .collect::<Vec<_>>())
+    json!(
+        evidence
+            .into_iter()
+            .map(|evidence| json!({
+                "kind": evidence.kind,
+                "file": evidence.file,
+                "symbol": evidence.symbol,
+                "span": evidence.span.map(|span| json!({
+                    "startLine": span.start_line,
+                    "startColumn": span.start_column,
+                    "endLine": span.end_line,
+                    "endColumn": span.end_column,
+                })),
+                "detail": evidence.detail,
+                "score": evidence.score,
+            }))
+            .collect::<Vec<_>>()
+    )
 }
 
 fn severity_to_str(severity: Severity) -> &'static str {

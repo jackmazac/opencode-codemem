@@ -32,7 +32,10 @@ This runs TypeScript typecheck, Bun tests, Rust tests, the release daemon build,
 - `artifacts/codemem-shared-0.1.0.tgz`
 - `artifacts/codemem-plugin-0.1.0.tgz`
 
-The plugin package includes the current platform daemon binary under `bin/<platform>-<arch>/codemem-daemon`.
+The plugin package includes:
+
+- the current platform daemon binary under `bin/<platform>-<arch>/codemem-daemon`
+- the `codemem` CLI binary at `dist/cli.js`
 
 ### 3) Install into global OpenCode config
 
@@ -94,7 +97,7 @@ You usually do not need `daemon.binaryPath` for packaged installs because the pl
 1. Start an OpenCode session in the project.
 2. The plugin lazily starts `codemem-daemon` the first time a `codemem_*` tool is invoked or a write/edit event needs indexing.
 3. The daemon creates local state under `.git/codemem` by default, or `.codemem` if no Git directory exists.
-4. Run `codemem_check` from OpenCode.
+4. Run `codemem_check` from OpenCode, or use `codemem status --json` from a terminal.
 
 The first cold run boots the daemon, scans the repo, stores the symbol/clone/type indexes, and returns compact JSON findings designed for agents.
 
@@ -106,14 +109,26 @@ The first cold run boots the daemon, scans the repo, stores the symbol/clone/typ
 
 ## Maintenance
 
-These RPC-backed commands are intended for a small CLI wrapper or direct daemon client:
+The packaged CLI is non-interactive and RPC-backed:
 
 ```bash
 codemem status
+codemem check --path src/index.ts --max-findings 25 --json
+codemem drift-map --max-findings 50 --json
+codemem conflicts --session-id sess_123 --json
 codemem maintain --dry-run
 codemem maintain --apply --prune-logs --compact
 codemem rebuild --dry-run
 codemem rebuild --apply
+codemem baseline diff --json
+codemem baseline write --apply --json
+codemem impact-cone --path src/index.ts --depth 2 --json
+codemem api-surface --json
+codemem layer-boundaries --json
+codemem lockfile --json
+codemem report --format sarif --json
+codemem artifact --kind audit --slug codemem-audit --apply --json
+codemem artifact --kind journal --apply --json
 ```
 
 ## Operational notes
@@ -121,7 +136,6 @@ codemem rebuild --apply
 - Plugin startup is intentionally lightweight. Expensive parsing and indexing stay out of OpenCode hook paths.
 - Edit hooks enqueue file changes; they do not block on full indexing.
 - Findings are bounded and machine-readable.
-- Embeddings are optional and off by default.
 - The daemon auth token is persisted in the state directory so OpenCode restarts can reconnect to an already-running daemon.
 - Local state is bounded and pruneable.
 

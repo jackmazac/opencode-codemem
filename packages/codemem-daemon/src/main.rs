@@ -10,7 +10,7 @@ mod store;
 use crate::{
     config::load_project_config,
     indexer::Indexer,
-    rpc::{serve, RpcContext},
+    rpc::{RpcContext, serve},
     session_conflicts::SessionConflictTracker,
     store::Store,
 };
@@ -21,7 +21,8 @@ use std::{env, fs, path::PathBuf, sync::Arc};
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     let project_root = required_path_env("CODEMEM_PROJECT_ROOT")?;
-    let state_dir = optional_path_env("CODEMEM_STATE_DIR").unwrap_or_else(|| project_root.join(".codemem"));
+    let state_dir =
+        optional_path_env("CODEMEM_STATE_DIR").unwrap_or_else(|| project_root.join(".codemem"));
     let endpoint = env::var("CODEMEM_ENDPOINT").context("CODEMEM_ENDPOINT is required")?;
     let auth_token = env::var("CODEMEM_AUTH_TOKEN").ok();
     let protocol_version = env::var("CODEMEM_PROTOCOL_VERSION")

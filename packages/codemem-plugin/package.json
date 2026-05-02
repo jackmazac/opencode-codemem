@@ -4,26 +4,26 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "codemem": "./dist/cli.js"
+  },
   "files": [
     "bin",
     "dist",
     "package.json"
   ],
   "dependencies": {
+    "@codemem/shared": "0.1.0",
     "@opencode-ai/plugin": "1.14.31"
-  },
-  "peerDependencies": {
-    "@codemem/shared": "0.1.0"
-  },
-  "peerDependenciesMeta": {
-    "@codemem/shared": {
-      "optional": true
-    }
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "default": "./dist/cli.js"
     }
   }
 }

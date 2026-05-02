@@ -23,11 +23,11 @@ describe("loadCodeMemConfig", () => {
       expect(loaded.config.ignore).toContain("**/dist/**");
       expect(loaded.config.ignore).toContain(".opencode/**");
       expect(loaded.config.layers.astClones).toBe(true);
-      expect(loaded.config.layers.semanticClones).toBe(false);
       expect(loaded.config.thresholds.minCloneTokens).toBe(24);
       expect(loaded.config.thresholds.sessionConflictDecayMs).toBe(900000);
       expect(loaded.config.telemetry.structuredLocalOnly).toBe(true);
       expect(loaded.config.promptInjection.mode).toBe("turn");
+      expect(Object.hasOwn(loaded.config, "embedding")).toBe(false);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

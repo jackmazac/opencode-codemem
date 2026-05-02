@@ -221,20 +221,43 @@ impl Finding {
 
     pub fn stable_key(&self) -> String {
         match self {
-            Self::SemanticClone { files, symbols, detector, .. } => {
+            Self::SemanticClone {
+                files,
+                symbols,
+                detector,
+                ..
+            } => {
                 format!("semantic:{}:{}", detector, pair_key(files, symbols))
             }
-            Self::TypeShapeDuplicate { shape_hash, symbols, .. } => {
+            Self::TypeShapeDuplicate {
+                shape_hash,
+                symbols,
+                ..
+            } => {
                 format!("type:{}:{}", shape_hash, symbols.join("|"))
             }
-            Self::ApiDrift { export_name, source_file, before, after, .. } => {
+            Self::ApiDrift {
+                export_name,
+                source_file,
+                before,
+                after,
+                ..
+            } => {
                 format!("api:{}:{}:{}:{}", source_file, export_name, before, after)
             }
             Self::DeadCode { file, symbol, .. } => format!("dead:{}:{}", file, symbol),
-            Self::Cycle { nodes, package_level, .. } => {
+            Self::Cycle {
+                nodes,
+                package_level,
+                ..
+            } => {
                 format!("cycle:{}:{}", package_level, nodes.join("|"))
             }
-            Self::SessionConflict { sessions, touched_cone, .. } => {
+            Self::SessionConflict {
+                sessions,
+                touched_cone,
+                ..
+            } => {
                 format!("session:{}:{}", sessions.join("|"), touched_cone.join("|"))
             }
         }

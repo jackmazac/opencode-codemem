@@ -4,9 +4,16 @@ use crate::model::{
 };
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
-use std::{collections::BTreeMap, fs, path::{Path, PathBuf}, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+const CURRENT_SCHEMA_VERSION: i64 = 1;
 
 pub struct Store {
     db_path: PathBuf,
@@ -15,17 +22,21 @@ pub struct Store {
 impl Store {
     pub fn open(state_dir: &Path) -> Result<Self> {
         fs::create_dir_all(state_dir).with_context(|| {
-            format!("failed to create codemem state directory: {}", state_dir.display())
+            format!(
+                "failed to create codemem state directory: {}",
+                state_dir.display()
+            )
         })?;
         let db_path = state_dir.join("codemem.sqlite3");
         let store = Self { db_path };
-        store.init_schema()?;
+        store.migrate_schema()?;
         Ok(store)
     }
 
     pub fn stats(&self) -> Result<StoreStats> {
         let conn = self.connect()?;
-        let indexed_files: usize = conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
+        let indexed_files: usize =
+            conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
         let clone_buckets: usize = conn.query_row(
             "SELECT COUNT(DISTINCT normalized_hash) FROM clone_fingerprints",
             [],
@@ -38,11 +49,8 @@ impl Store {
         )?;
         let sessions_tracked: usize =
             conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?;
-        let findings_cache_entries: usize = conn.query_row(
-            "SELECT COUNT(*) FROM findings_cache",
-            [],
-            |row| row.get(0),
-        )?;
+        let findings_cache_entries: usize =
+            conn.query_row("SELECT COUNT(*) FROM findings_cache", [], |row| row.get(0))?;
         Ok(StoreStats {
             indexed_files,
             clone_buckets,
@@ -79,13 +87,22 @@ impl Store {
             ],
         )?;
 
-        tx.execute("DELETE FROM imports WHERE from_path = ?1", params![document.path])?;
-        tx.execute("DELETE FROM public_exports WHERE source_file = ?1", params![document.path])?;
+        tx.execute(
+            "DELETE FROM imports WHERE from_path = ?1",
+            params![document.path],
+        )?;
+        tx.execute(
+            "DELETE FROM public_exports WHERE source_file = ?1",
+            params![document.path],
+        )?;
         tx.execute(
             "DELETE FROM clone_fingerprints WHERE file_path = ?1",
             params![document.path],
         )?;
-        tx.execute("DELETE FROM type_shapes WHERE file_path = ?1", params![document.path])?;
+        tx.execute(
+            "DELETE FROM type_shapes WHERE file_path = ?1",
+            params![document.path],
+        )?;
 
         for edge in &document.imports {
             tx.execute(
@@ -164,7 +181,10 @@ impl Store {
         let mut conn = self.connect()?;
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM files WHERE path = ?1", params![relative_path])?;
-        tx.execute("DELETE FROM imports WHERE from_path = ?1", params![relative_path])?;
+        tx.execute(
+            "DELETE FROM imports WHERE from_path = ?1",
+            params![relative_path],
+        )?;
         tx.execute(
             "DELETE FROM public_exports WHERE source_file = ?1",
             params![relative_path],
@@ -173,7 +193,10 @@ impl Store {
             "DELETE FROM clone_fingerprints WHERE file_path = ?1",
             params![relative_path],
         )?;
-        tx.execute("DELETE FROM type_shapes WHERE file_path = ?1", params![relative_path])?;
+        tx.execute(
+            "DELETE FROM type_shapes WHERE file_path = ?1",
+            params![relative_path],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -265,9 +288,7 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT export_name, source_file, signature FROM api_baseline ORDER BY source_file, export_name",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(((row.get(0)?, row.get(1)?), row.get(2)?))
-        })?;
+        let rows = stmt.query_map([], |row| Ok(((row.get(0)?, row.get(1)?), row.get(2)?)))?;
         Ok(rows.collect::<std::result::Result<BTreeMap<_, _>, _>>()?)
     }
 
@@ -347,7 +368,11 @@ impl Store {
         let conn = self.connect()?;
         conn.execute(
             "INSERT INTO event_log (ts_ms, kind, payload_json) VALUES (?1, ?2, ?3)",
-            params![Utc::now().timestamp_millis(), kind, serde_json::to_string(payload)?],
+            params![
+                Utc::now().timestamp_millis(),
+                kind,
+                serde_json::to_string(payload)?
+            ],
         )?;
         conn.execute(
             r#"
@@ -364,10 +389,8 @@ impl Store {
     pub fn prune(&self, retain_days: i64) -> Result<Vec<String>> {
         let conn = self.connect()?;
         let cutoff_ms = Utc::now().timestamp_millis() - retain_days.max(1) * 24 * 60 * 60 * 1_000;
-        let removed_logs = conn.execute(
-            "DELETE FROM event_log WHERE ts_ms < ?1",
-            params![cutoff_ms],
-        )?;
+        let removed_logs =
+            conn.execute("DELETE FROM event_log WHERE ts_ms < ?1", params![cutoff_ms])?;
         let removed_sessions = conn.execute(
             "DELETE FROM sessions WHERE last_seen_ms < ?1",
             params![cutoff_ms],
@@ -388,7 +411,11 @@ impl Store {
     pub fn file_digest(&self, path: &str) -> Result<Option<String>> {
         let conn = self.connect()?;
         let digest = conn
-            .query_row("SELECT digest FROM files WHERE path = ?1", params![path], |row| row.get(0))
+            .query_row(
+                "SELECT digest FROM files WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )
             .optional()?;
         Ok(digest)
     }
@@ -434,8 +461,9 @@ impl Store {
     }
 
     fn connect(&self) -> Result<Connection> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open sqlite database: {}", self.db_path.display()))?;
+        let conn = Connection::open(&self.db_path).with_context(|| {
+            format!("failed to open sqlite database: {}", self.db_path.display())
+        })?;
         conn.busy_timeout(Duration::from_millis(1_500))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -443,8 +471,15 @@ impl Store {
         Ok(conn)
     }
 
-    fn init_schema(&self) -> Result<()> {
+    fn migrate_schema(&self) -> Result<()> {
         let conn = self.connect()?;
+        let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if current_version > CURRENT_SCHEMA_VERSION {
+            anyhow::bail!(
+                "codemem store schema version {current_version} is newer than supported version {CURRENT_SCHEMA_VERSION}"
+            );
+        }
+
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS files (
@@ -532,10 +567,218 @@ impl Store {
             );
             "#,
         )?;
+        if current_version < CURRENT_SCHEMA_VERSION {
+            conn.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
+        }
         Ok(())
     }
 }
 
 fn bool_to_int(value: bool) -> i64 {
     if value { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+    use crate::model::FileDocument;
+    use rusqlite::{Connection, params};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn open_sets_user_version_on_empty_store() {
+        let state_dir = temp_dir("empty");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+
+        let store = Store::open(&state_dir).expect("open store");
+
+        assert_eq!(sqlite_user_version(&store.db_path), 1);
+    }
+
+    #[test]
+    fn open_migrates_seeded_zero_version_store_without_losing_rows() {
+        let state_dir = temp_dir("seeded");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let db_path = state_dir.join("codemem.sqlite3");
+        seed_zero_version_store(&db_path);
+
+        let store = Store::open(&state_dir).expect("open store");
+        let stats = store.stats().expect("store stats");
+
+        assert_eq!(sqlite_user_version(&store.db_path), 1);
+        assert_eq!(stats.indexed_files, 1);
+        assert_eq!(
+            store
+                .file_digest("src/index.ts")
+                .expect("file digest")
+                .as_deref(),
+            Some("digest-a")
+        );
+    }
+
+    #[test]
+    fn reopen_preserves_user_version_and_seeded_rows() {
+        let state_dir = temp_dir("reopen");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let store = Store::open(&state_dir).expect("open store");
+        store
+            .upsert_file_document(&FileDocument {
+                path: "src/index.ts".into(),
+                digest: "digest-b".into(),
+                mtime_ms: 1,
+                size_bytes: 10,
+                generated: false,
+                parse_error: None,
+                imports: Vec::new(),
+                exports: Vec::new(),
+                clones: Vec::new(),
+                type_shapes: Vec::new(),
+            })
+            .expect("upsert file");
+
+        let reopened = Store::open(&state_dir).expect("reopen store");
+
+        assert_eq!(sqlite_user_version(&reopened.db_path), 1);
+        assert_eq!(
+            reopened
+                .file_digest("src/index.ts")
+                .expect("file digest")
+                .as_deref(),
+            Some("digest-b")
+        );
+    }
+
+    #[test]
+    fn open_rejects_newer_schema_version() {
+        let state_dir = temp_dir("future");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let db_path = state_dir.join("codemem.sqlite3");
+        let conn = Connection::open(&db_path).expect("open sqlite");
+        conn.execute_batch("PRAGMA user_version = 999;")
+            .expect("set future version");
+        drop(conn);
+
+        let error = match Store::open(&state_dir) {
+            Ok(_) => panic!("future schema should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("newer than supported version"));
+    }
+
+    fn seed_zero_version_store(db_path: &Path) {
+        let conn = Connection::open(db_path).expect("open sqlite");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE files (
+                path TEXT PRIMARY KEY,
+                digest TEXT NOT NULL,
+                mtime_ms INTEGER NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                generated INTEGER NOT NULL,
+                parse_error TEXT,
+                indexed_at_ms INTEGER NOT NULL
+            );
+
+            CREATE TABLE imports (
+                from_path TEXT NOT NULL,
+                specifier TEXT NOT NULL,
+                to_path TEXT,
+                is_dynamic INTEGER NOT NULL,
+                is_type_only INTEGER NOT NULL,
+                line INTEGER NOT NULL
+            );
+
+            CREATE TABLE public_exports (
+                export_name TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                signature TEXT NOT NULL
+            );
+
+            CREATE TABLE clone_fingerprints (
+                file_path TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                normalized_hash TEXT NOT NULL,
+                simhash INTEGER NOT NULL,
+                token_count INTEGER NOT NULL,
+                statement_count INTEGER NOT NULL,
+                tokens_json TEXT NOT NULL
+            );
+
+            CREATE TABLE type_shapes (
+                file_path TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                shape_hash TEXT NOT NULL,
+                fingerprint_json TEXT NOT NULL,
+                depth INTEGER NOT NULL,
+                suppressed INTEGER NOT NULL
+            );
+
+            CREATE TABLE api_baseline (
+                export_name TEXT NOT NULL,
+                source_file TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY(export_name, source_file)
+            );
+
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY,
+                last_seen_ms INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                touched_files_json TEXT NOT NULL,
+                touched_cone_json TEXT NOT NULL,
+                parent_session_id TEXT
+            );
+
+            CREATE TABLE findings_cache (
+                cache_key TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );
+
+            CREATE TABLE event_log (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts_ms INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            PRAGMA user_version = 0;
+            "#,
+        )
+        .expect("create seeded schema");
+        conn.execute(
+            r#"
+            INSERT INTO files (path, digest, mtime_ms, size_bytes, generated, parse_error, indexed_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params!["src/index.ts", "digest-a", 1_i64, 10_i64, 0_i64, Option::<String>::None, 2_i64],
+        )
+        .expect("insert seeded file");
+    }
+
+    fn sqlite_user_version(db_path: &Path) -> i64 {
+        let conn = Connection::open(db_path).expect("open sqlite");
+        conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read user version")
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "codemem-store-{name}-{}-{unique}",
+            std::process::id()
+        ))
+    }
 }

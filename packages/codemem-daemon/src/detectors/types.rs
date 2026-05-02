@@ -8,18 +8,25 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone)]
 pub struct TypeShapeDetector {
+    enabled: bool,
     min_members: usize,
 }
 
 impl TypeShapeDetector {
     pub fn new(config: &ProjectConfig) -> Self {
         Self {
+            enabled: config.layers.type_shapes,
             min_members: config.thresholds.type_shape_min_members,
         }
     }
 
-    pub fn analyze_file(&self, relative_path: &str, source: &str, generated: bool) -> Vec<TypeShapeRecord> {
-        if generated {
+    pub fn analyze_file(
+        &self,
+        relative_path: &str,
+        source: &str,
+        generated: bool,
+    ) -> Vec<TypeShapeRecord> {
+        if generated || !self.enabled {
             return Vec::new();
         }
 
@@ -28,7 +35,8 @@ impl TypeShapeDetector {
             if shape.members.len() < self.min_members {
                 continue;
             }
-            let fingerprint_json = serde_json::to_string(&shape.members).unwrap_or_else(|_| "[]".to_string());
+            let fingerprint_json =
+                serde_json::to_string(&shape.members).unwrap_or_else(|_| "[]".to_string());
             let shape_hash = hash_members(&shape.members);
             let suppressed = suppress_shape(&shape.members);
             records.push(TypeShapeRecord {
@@ -44,12 +52,19 @@ impl TypeShapeDetector {
     }
 
     pub fn detect(&self, records: &[TypeShapeRecord], max_findings: usize) -> Vec<Finding> {
+        if !self.enabled {
+            return Vec::new();
+        }
+
         let mut buckets: BTreeMap<&str, Vec<&TypeShapeRecord>> = BTreeMap::new();
         for record in records {
             if record.suppressed {
                 continue;
             }
-            buckets.entry(record.shape_hash.as_str()).or_default().push(record);
+            buckets
+                .entry(record.shape_hash.as_str())
+                .or_default()
+                .push(record);
         }
 
         let mut findings = Vec::new();
@@ -109,10 +124,8 @@ fn extract_shapes(source: &str) -> Vec<ShapeCandidate> {
         r"(?m)^\s*(?:export\s+)?interface\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^\n{]+>)?\s*\{",
     )
     .unwrap();
-    let type_re = Regex::new(
-        r"(?m)^\s*(?:export\s+)?type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{",
-    )
-    .unwrap();
+    let type_re =
+        Regex::new(r"(?m)^\s*(?:export\s+)?type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{").unwrap();
     let class_re = Regex::new(
         r"(?m)^\s*(?:export\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)(?:<[^\n{]+>)?(?:\s+extends\s+[^\n{]+)?\s*\{",
     )
@@ -137,7 +150,11 @@ fn extract_shapes(source: &str) -> Vec<ShapeCandidate> {
     shapes
 }
 
-fn capture_shape(source: &str, captures: &regex::Captures<'_>, kind: &str) -> Option<ShapeCandidate> {
+fn capture_shape(
+    source: &str,
+    captures: &regex::Captures<'_>,
+    kind: &str,
+) -> Option<ShapeCandidate> {
     let whole = captures.get(0)?;
     let name = captures.get(1)?.as_str().to_string();
     let body_start = source[whole.start()..]
@@ -169,7 +186,11 @@ fn match_brace(source: &str, open_offset: usize) -> Option<usize> {
     for (index, byte) in bytes.iter().enumerate().skip(open_offset) {
         let current = *byte as char;
         let next = bytes.get(index + 1).copied().map(char::from);
-        let previous = if index == 0 { None } else { bytes.get(index - 1).copied().map(char::from) };
+        let previous = if index == 0 {
+            None
+        } else {
+            bytes.get(index - 1).copied().map(char::from)
+        };
 
         if in_line_comment {
             if current == '\n' {
@@ -252,14 +273,10 @@ fn parse_object_members(body: &str) -> Vec<String> {
         r#"(?m)^\s*(readonly\s+)?([A-Za-z_][A-Za-z0-9_]*|['"][^'"]+['"])(\?)?\s*:\s*([^;]+);?"#,
     )
     .unwrap();
-    let method_re = Regex::new(
-        r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)(\?)?\s*\(([^)]*)\)\s*:\s*([^;{]+);?",
-    )
-    .unwrap();
-    let index_re = Regex::new(
-        r"(?m)^\s*\[[^\]]+\]\s*:\s*([^;]+);?",
-    )
-    .unwrap();
+    let method_re =
+        Regex::new(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)(\?)?\s*\(([^)]*)\)\s*:\s*([^;{]+);?")
+            .unwrap();
+    let index_re = Regex::new(r"(?m)^\s*\[[^\]]+\]\s*:\s*([^;]+);?").unwrap();
 
     let mut members = Vec::new();
     for captures in property_re.captures_iter(body) {
@@ -346,7 +363,11 @@ fn parse_class_members(body: &str) -> Vec<String> {
 }
 
 fn normalize_member_name(value: &str) -> String {
-    value.trim().trim_matches('"').trim_matches('\'').to_string()
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string()
 }
 
 fn normalize_params(value: &str) -> Vec<String> {
@@ -381,8 +402,25 @@ fn normalize_type(value: &str) -> String {
 
     let identifier_re = Regex::new(r"\b[A-Za-z_][A-Za-z0-9_]*\b").unwrap();
     let builtins = [
-        "string", "number", "boolean", "unknown", "any", "never", "void", "null", "undefined", "object",
-        "record", "array", "promise", "date", "map", "set", "readonlyarray", "bigint", "symbol",
+        "string",
+        "number",
+        "boolean",
+        "unknown",
+        "any",
+        "never",
+        "void",
+        "null",
+        "undefined",
+        "object",
+        "record",
+        "array",
+        "promise",
+        "date",
+        "map",
+        "set",
+        "readonlyarray",
+        "bigint",
+        "symbol",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -443,8 +481,16 @@ fn suppress_shape(members: &[String]) -> bool {
         return true;
     }
     let common = [
-        ["prop:id:rw:req:string", "prop:name:rw:req:string", "prop:createdAt:rw:req:T"],
-        ["prop:code:rw:req:string", "prop:message:rw:req:string", "prop:status:rw:req:number"],
+        [
+            "prop:id:rw:req:string",
+            "prop:name:rw:req:string",
+            "prop:createdAt:rw:req:T",
+        ],
+        [
+            "prop:code:rw:req:string",
+            "prop:message:rw:req:string",
+            "prop:status:rw:req:number",
+        ],
     ];
     common.iter().any(|pattern| {
         pattern

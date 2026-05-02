@@ -1,4 +1,5 @@
 import net from "node:net";
+import type { Socket } from "node:net";
 import { once } from "node:events";
 import {
   CODEMEM_PROTOCOL_VERSION,
@@ -8,6 +9,8 @@ import {
   isRpcErrorResponse,
   type CheckRequest,
   type CheckResponse,
+  type ChangeRiskRequest,
+  type ChangeRiskResponse,
   type ConflictsRequest,
   type ConflictsResponse,
   type DriftMapRequest,
@@ -15,6 +18,14 @@ import {
   type FilesChangedNotification,
   type HealthRequest,
   type HealthResponse,
+  type ImpactConeRequest,
+  type ImpactConeResponse,
+  type ApiSurfaceRequest,
+  type ApiSurfaceResponse,
+  type LayerBoundariesRequest,
+  type LayerBoundariesResponse,
+  type LockfileRequest,
+  type LockfileResponse,
   type MaintainRequest,
   type MaintainResponse,
   type RebuildRequest,
@@ -59,6 +70,26 @@ export class DaemonClient {
 
   conflicts(params: ConflictsRequest): Promise<ConflictsResponse> {
     return this.request("analysis.conflicts", params);
+  }
+
+  impactCone(params: ImpactConeRequest): Promise<ImpactConeResponse> {
+    return this.request("analysis.impactCone", params);
+  }
+
+  changeRisk(params: ChangeRiskRequest): Promise<ChangeRiskResponse> {
+    return this.request("analysis.changeRisk", params);
+  }
+
+  apiSurface(params: ApiSurfaceRequest): Promise<ApiSurfaceResponse> {
+    return this.request("analysis.apiSurface", params);
+  }
+
+  layerBoundaries(params: LayerBoundariesRequest): Promise<LayerBoundariesResponse> {
+    return this.request("analysis.layerBoundaries", params);
+  }
+
+  lockfile(params: LockfileRequest): Promise<LockfileResponse> {
+    return this.request("analysis.lockfile", params);
   }
 
   status(params: StatusRequest): Promise<StatusResponse> {
@@ -128,7 +159,7 @@ export class DaemonClient {
   }
 }
 
-async function connectSocket(address: string, timeoutMs: number): Promise<any> {
+async function connectSocket(address: string, timeoutMs: number): Promise<Socket> {
   const socket = net.createConnection(address);
   socket.setTimeout(0);
 
@@ -144,12 +175,12 @@ async function connectSocket(address: string, timeoutMs: number): Promise<any> {
     await Promise.race([onConnect, onError]);
     return socket;
   } finally {
-    clearTimeout(timeout as any);
+    clearTimeout(timeout);
   }
 }
 
 async function readResponse(
-  socket: any,
+  socket: Socket,
   payload: Buffer,
   requestID: string,
   timeoutMs: number,
@@ -187,7 +218,7 @@ async function readResponse(
     socket.write(payload);
     return await responsePromise;
   } finally {
-    clearTimeout(timeout as any);
+    clearTimeout(timeout);
   }
 }
 

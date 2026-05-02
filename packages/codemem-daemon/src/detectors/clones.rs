@@ -9,6 +9,8 @@ use xxhash_rust::xxh3::xxh3_64;
 
 #[derive(Debug, Clone)]
 pub struct CloneDetector {
+    ast_enabled: bool,
+    simhash_enabled: bool,
     min_clone_tokens: usize,
     min_clone_statements: usize,
     simhash_radius: u8,
@@ -17,14 +19,21 @@ pub struct CloneDetector {
 impl CloneDetector {
     pub fn new(config: &ProjectConfig) -> Self {
         Self {
+            ast_enabled: config.layers.ast_clones,
+            simhash_enabled: config.layers.simhash_clones,
             min_clone_tokens: config.thresholds.min_clone_tokens,
             min_clone_statements: config.thresholds.min_clone_statements,
             simhash_radius: config.thresholds.simhash_hamming_radius,
         }
     }
 
-    pub fn analyze_file(&self, relative_path: &str, source: &str, generated: bool) -> Vec<CloneFingerprint> {
-        if generated {
+    pub fn analyze_file(
+        &self,
+        relative_path: &str,
+        source: &str,
+        generated: bool,
+    ) -> Vec<CloneFingerprint> {
+        if generated || (!self.ast_enabled && !self.simhash_enabled) {
             return Vec::new();
         }
 
@@ -36,18 +45,27 @@ impl CloneDetector {
 
     pub fn detect(&self, fingerprints: &[CloneFingerprint], max_findings: usize) -> Vec<Finding> {
         let mut findings = Vec::new();
-        findings.extend(self.detect_exact(fingerprints, max_findings));
+        if self.ast_enabled {
+            findings.extend(self.detect_exact(fingerprints, max_findings));
+        }
         if findings.len() >= max_findings {
             findings.truncate(max_findings);
             return findings;
         }
-        findings.extend(self.detect_near_miss(fingerprints, max_findings - findings.len()));
+        if self.simhash_enabled {
+            findings.extend(self.detect_near_miss(fingerprints, max_findings - findings.len()));
+        }
         findings.sort_by(|left, right| {
             right
                 .severity()
                 .score()
                 .cmp(&left.severity().score())
-                .then_with(|| right.confidence().partial_cmp(&left.confidence()).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| {
+                    right
+                        .confidence()
+                        .partial_cmp(&left.confidence())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .then_with(|| left.stable_key().cmp(&right.stable_key()))
         });
         findings.truncate(max_findings);
@@ -131,7 +149,11 @@ impl CloneDetector {
         findings
     }
 
-    fn detect_near_miss(&self, fingerprints: &[CloneFingerprint], max_findings: usize) -> Vec<Finding> {
+    fn detect_near_miss(
+        &self,
+        fingerprints: &[CloneFingerprint],
+        max_findings: usize,
+    ) -> Vec<Finding> {
         if max_findings == 0 {
             return Vec::new();
         }
@@ -143,8 +165,13 @@ impl CloneDetector {
             {
                 continue;
             }
-            for (band_index, band_value) in band_signatures(fingerprint.simhash).into_iter().enumerate() {
-                bands.entry((band_index, band_value)).or_default().push(index);
+            for (band_index, band_value) in
+                band_signatures(fingerprint.simhash).into_iter().enumerate()
+            {
+                bands
+                    .entry((band_index, band_value))
+                    .or_default()
+                    .push(index);
             }
         }
 
@@ -178,12 +205,14 @@ impl CloneDetector {
                     if hamming > self.simhash_radius {
                         continue;
                     }
-                    let token_similarity = jaccard_similarity(&left.normalized_tokens, &right.normalized_tokens);
+                    let token_similarity =
+                        jaccard_similarity(&left.normalized_tokens, &right.normalized_tokens);
                     let token_count_ratio = ratio(left.token_count, right.token_count);
                     if token_similarity < 0.72 || token_count_ratio < 0.6 {
                         continue;
                     }
-                    let confidence = ((1.0 - (hamming as f64 / 64.0)) * 0.55) + (token_similarity * 0.45);
+                    let confidence =
+                        ((1.0 - (hamming as f64 / 64.0)) * 0.55) + (token_similarity * 0.45);
                     if confidence < 0.78 {
                         continue;
                     }
@@ -244,10 +273,16 @@ impl CloneDetector {
         findings
     }
 
-    fn block_to_fingerprint(&self, relative_path: &str, block: &FunctionBlock) -> Option<CloneFingerprint> {
+    fn block_to_fingerprint(
+        &self,
+        relative_path: &str,
+        block: &FunctionBlock,
+    ) -> Option<CloneFingerprint> {
         let normalized_tokens = normalize_tokens(&block.body);
         let statement_count = count_statements(&block.body);
-        if normalized_tokens.len() < self.min_clone_tokens || statement_count < self.min_clone_statements {
+        if normalized_tokens.len() < self.min_clone_tokens
+            || statement_count < self.min_clone_statements
+        {
             return None;
         }
         let normalized_hash = hash_tokens(&normalized_tokens);
@@ -287,16 +322,24 @@ fn extract_function_blocks(source: &str) -> Vec<FunctionBlock> {
     let mut seen_starts = BTreeSet::new();
     for (regex, kind) in patterns {
         for captures in regex.captures_iter(source) {
-            let Some(whole) = captures.get(0) else { continue };
-            let Some(name) = captures.get(1) else { continue };
+            let Some(whole) = captures.get(0) else {
+                continue;
+            };
+            let Some(name) = captures.get(1) else {
+                continue;
+            };
             let body_start = source[whole.start()..]
                 .find('{')
                 .map(|offset| whole.start() + offset);
-            let Some(body_start) = body_start else { continue };
+            let Some(body_start) = body_start else {
+                continue;
+            };
             if !seen_starts.insert(body_start) {
                 continue;
             }
-            let Some(body_end) = match_brace(source, body_start) else { continue };
+            let Some(body_end) = match_brace(source, body_start) else {
+                continue;
+            };
             let body = source[body_start..=body_end].to_string();
             let start_line = byte_offset_to_line(source, whole.start());
             let end_line = byte_offset_to_line(source, body_end);
@@ -313,7 +356,11 @@ fn extract_function_blocks(source: &str) -> Vec<FunctionBlock> {
 }
 
 fn byte_offset_to_line(source: &str, offset: usize) -> u32 {
-    (source[..offset.min(source.len())].bytes().filter(|byte| *byte == b'\n').count() + 1) as u32
+    (source[..offset.min(source.len())]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1) as u32
 }
 
 fn match_brace(source: &str, open_offset: usize) -> Option<usize> {
@@ -329,7 +376,11 @@ fn match_brace(source: &str, open_offset: usize) -> Option<usize> {
     for (index, byte) in bytes.iter().enumerate().skip(open_offset) {
         let current = *byte as char;
         let next = bytes.get(index + 1).copied().map(char::from);
-        let previous = if index == 0 { None } else { bytes.get(index - 1).copied().map(char::from) };
+        let previous = if index == 0 {
+            None
+        } else {
+            bytes.get(index - 1).copied().map(char::from)
+        };
 
         if in_line_comment {
             if current == '\n' {
@@ -413,28 +464,62 @@ fn normalize_tokens(source: &str) -> Vec<String> {
     )
     .unwrap();
     let keywords = [
-        "if", "else", "for", "while", "switch", "case", "return", "throw", "await", "async", "try",
-        "catch", "finally", "break", "continue", "new", "typeof", "instanceof", "in", "of", "function",
-        "const", "let", "var", "class", "extends", "implements", "import", "export", "default",
+        "if",
+        "else",
+        "for",
+        "while",
+        "switch",
+        "case",
+        "return",
+        "throw",
+        "await",
+        "async",
+        "try",
+        "catch",
+        "finally",
+        "break",
+        "continue",
+        "new",
+        "typeof",
+        "instanceof",
+        "in",
+        "of",
+        "function",
+        "const",
+        "let",
+        "var",
+        "class",
+        "extends",
+        "implements",
+        "import",
+        "export",
+        "default",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
 
     let mut tokens = Vec::new();
     for token in token_regex.find_iter(source).map(|match_| match_.as_str()) {
-        let normalized = if token.starts_with('"') || token.starts_with('\'') || token.starts_with('`') {
-            "LIT".to_string()
-        } else if token.chars().next().is_some_and(|ch| ch.is_ascii_digit()) || token.starts_with("0x") {
-            "LIT".to_string()
-        } else if token.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_') {
-            if keywords.contains(token) {
-                token.to_string()
+        let normalized =
+            if token.starts_with('"') || token.starts_with('\'') || token.starts_with('`') {
+                "LIT".to_string()
+            } else if token.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+                || token.starts_with("0x")
+            {
+                "LIT".to_string()
+            } else if token
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+            {
+                if keywords.contains(token) {
+                    token.to_string()
+                } else {
+                    "ID".to_string()
+                }
             } else {
-                "ID".to_string()
-            }
-        } else {
-            token.to_string()
-        };
+                token.to_string()
+            };
         tokens.push(normalized);
     }
     tokens
@@ -458,7 +543,10 @@ fn hash_tokens(tokens: &[String]) -> String {
 
 fn compute_simhash(tokens: &[String]) -> u64 {
     let shingles = if tokens.len() >= 5 {
-        tokens.windows(5).map(|window| window.join(" ")).collect::<Vec<_>>()
+        tokens
+            .windows(5)
+            .map(|window| window.join(" "))
+            .collect::<Vec<_>>()
     } else {
         vec![tokens.join(" ")]
     };
