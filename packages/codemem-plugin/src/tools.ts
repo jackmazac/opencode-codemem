@@ -22,12 +22,12 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
     codemem_check: tool({
       description:
         "Run codemem semantic drift analysis for the current project and return compact JSON findings.",
-      args: z.object({
+      args: {
         maxFindings: z.number().int().min(1).max(200).default(50),
         includeEvidence: z.boolean().default(true),
         waitForFreshIndex: z.boolean().default(false),
         paths: z.array(z.string()).optional(),
-      }),
+      },
       async execute(args: {
         maxFindings?: number;
         includeEvidence?: boolean;
@@ -66,9 +66,9 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
     codemem_drift_map: tool({
       description:
         "Return a compact graph of drift-relevant nodes and edges for LLM planning and refactoring.",
-      args: z.object({
+      args: {
         maxFindings: z.number().int().min(1).max(200).default(50),
-      }),
+      },
       async execute(args: { maxFindings?: number }, context) {
         context.metadata({ title: "codemem drift map" });
         try {
@@ -97,9 +97,9 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
     codemem_conflicts: tool({
       description:
         "Return concurrent-session conflict risk for overlapping dependency cones in the current project.",
-      args: z.object({
+      args: {
         includeInfo: z.boolean().default(false),
-      }),
+      },
       async execute(args: { includeInfo?: boolean }, context) {
         context.metadata({ title: "codemem conflicts" });
         try {
@@ -125,11 +125,11 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
     codemem_change_risk: tool({
       description:
         "Score dependency-graph change risk for one or more paths using bounded, explainable codemem evidence.",
-      args: z.object({
+      args: {
         paths: z.array(z.string()).min(1),
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
-      }),
+      },
       async execute(args: { paths: string[]; depth?: number; maxFindings?: number }, context) {
         context.metadata({ title: "codemem change risk" });
         try {
@@ -155,11 +155,11 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
     codemem_before_edit: tool({
       description:
         "Check whether target paths look isolated, shared, public, or conflicted before editing.",
-      args: z.object({
+      args: {
         paths: z.array(z.string()).min(1),
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
-      }),
+      },
       async execute(args: { paths: string[]; depth?: number; maxFindings?: number }, context) {
         context.metadata({ title: "codemem before edit" });
         try {
@@ -194,12 +194,12 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
     codemem_review_focus: tool({
       description:
         "Return the highest-risk files or symbols reviewers should inspect first for changed paths.",
-      args: z.object({
+      args: {
         paths: z.array(z.string()).min(1),
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
         maxItems: z.number().int().min(1).max(50).default(10),
-      }),
+      },
       async execute(args: { paths: string[]; depth?: number; maxFindings?: number; maxItems?: number }, context) {
         context.metadata({ title: "codemem review focus" });
         try {

@@ -106,6 +106,9 @@ The first cold run boots the daemon, scans the repo, stores the symbol/clone/typ
 - `codemem_check`: compact findings list.
 - `codemem_drift_map`: bounded graph for planning/refactor agents.
 - `codemem_conflicts`: overlapping dependency-cone risk across sessions.
+- `codemem_change_risk`: dependency-cone and public-surface risk for paths.
+- `codemem_before_edit`: pre-edit isolation/shared-surface check.
+- `codemem_review_focus`: reviewer-focused high-risk files and symbols.
 
 ## Maintenance
 
@@ -129,6 +132,34 @@ codemem lockfile --json
 codemem report --format sarif --json
 codemem artifact --kind audit --slug codemem-audit --apply --json
 codemem artifact --kind journal --apply --json
+```
+
+## Benchmarks
+
+The local benchmark harness exercises the CLI path and reports machine-readable timings:
+
+```bash
+bun run bench -- --quick
+```
+
+Quick mode covers daemon status and `codemem check` against the current repository. Full mode creates a synthetic project and measures cold status, cold check, hot-edit check, review-focus, and warm status:
+
+```bash
+bun run bench
+```
+
+Treat the numbers as local regression evidence until CI threshold gates are added for cold-index, hot-edit, daemon restart, and RSS targets.
+
+Use the local threshold gate to fail on obvious regressions in the synthetic-project benchmark:
+
+```bash
+bun run bench:threshold
+```
+
+The packaged runtime smoke test installs the local `.tgz` artifacts into a temporary config, verifies the `codemem` bin, starts the packaged daemon, and runs `doctor` plus `check`:
+
+```bash
+bun run smoke:packaged
 ```
 
 ## Operational notes

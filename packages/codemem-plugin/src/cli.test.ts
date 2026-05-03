@@ -3,7 +3,12 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
-import { CODEMEM_PROTOCOL_VERSION, decodeFrames, encodeFrame, type RpcResponseEnvelope } from "@codemem/shared/protocol";
+import {
+  CODEMEM_PROTOCOL_VERSION,
+  decodeFrames,
+  encodeFrame,
+  type RpcResponseEnvelope,
+} from "@codemem/shared/protocol";
 import { parseCliArgs, runCodeMemCli, type CliRuntime } from "./cli";
 import { DaemonClient } from "./daemon/client";
 
@@ -15,6 +20,19 @@ describe("parseCliArgs", () => {
       ok: true,
       command: {
         kind: "status",
+        json: true,
+        projectRoot: "/repo",
+      },
+    });
+  });
+
+  test("parses doctor as fleet-standard status health check", () => {
+    const parsed = parseCliArgs(["doctor", "--json", "--project-root", "/repo"], "/fallback");
+
+    expect(parsed).toEqual({
+      ok: true,
+      command: {
+        kind: "doctor",
         json: true,
         projectRoot: "/repo",
       },
@@ -97,7 +115,10 @@ describe("parseCliArgs", () => {
   });
 
   test("parses baseline diff and write commands", () => {
-    const diff = parseCliArgs(["baseline", "diff", "--baseline", ".codemem/base.json", "--json"], "/repo");
+    const diff = parseCliArgs(
+      ["baseline", "diff", "--baseline", ".codemem/base.json", "--json"],
+      "/repo",
+    );
     const write = parseCliArgs(["baseline", "write", "--apply", "--json"], "/repo");
 
     expect(diff).toEqual({
@@ -124,7 +145,9 @@ describe("parseCliArgs", () => {
   });
 
   test("parses impact, api-surface, layer-boundaries, and lockfile commands", () => {
-    expect(parseCliArgs(["impact-cone", "--path", "src/a.ts", "--depth", "3", "--json"], "/repo")).toEqual({
+    expect(
+      parseCliArgs(["impact-cone", "--path", "src/a.ts", "--depth", "3", "--json"], "/repo"),
+    ).toEqual({
       ok: true,
       command: {
         kind: "impact-cone",
@@ -165,7 +188,18 @@ describe("parseCliArgs", () => {
   test("parses change risk, review focus, and change delta commands", () => {
     expect(
       parseCliArgs(
-        ["change-risk", "--path", "src/a.ts", "--path", "src/b.ts", "--depth", "3", "--max-findings", "25", "--json"],
+        [
+          "change-risk",
+          "--path",
+          "src/a.ts",
+          "--path",
+          "src/b.ts",
+          "--depth",
+          "3",
+          "--max-findings",
+          "25",
+          "--json",
+        ],
         "/repo",
       ),
     ).toEqual({
@@ -179,7 +213,9 @@ describe("parseCliArgs", () => {
         projectRoot: "/repo",
       },
     });
-    expect(parseCliArgs(["review-focus", "--path", "src/a.ts", "--max-items", "7", "--json"], "/repo")).toEqual({
+    expect(
+      parseCliArgs(["review-focus", "--path", "src/a.ts", "--max-items", "7", "--json"], "/repo"),
+    ).toEqual({
       ok: true,
       command: {
         kind: "review-focus",
@@ -191,7 +227,9 @@ describe("parseCliArgs", () => {
         projectRoot: "/repo",
       },
     });
-    expect(parseCliArgs(["change-delta", "--baseline", ".codemem/base.json", "--json"], "/repo")).toEqual({
+    expect(
+      parseCliArgs(["change-delta", "--baseline", ".codemem/base.json", "--json"], "/repo"),
+    ).toEqual({
       ok: true,
       command: {
         kind: "change-delta",
@@ -227,7 +265,12 @@ describe("parseCliArgs", () => {
   });
 
   test("parses artifact emission as dry-run unless apply is explicit", () => {
-    expect(parseCliArgs(["artifact", "--kind", "audit", "--slug", "codemem-audit", "--apply", "--json"], "/repo")).toEqual({
+    expect(
+      parseCliArgs(
+        ["artifact", "--kind", "audit", "--slug", "codemem-audit", "--apply", "--json"],
+        "/repo",
+      ),
+    ).toEqual({
       ok: true,
       command: {
         kind: "artifact",
@@ -259,11 +302,14 @@ describe("parseCliArgs", () => {
       exitCode: 2,
       message: "Missing value for --path\n\nExample: codemem check --path src/index.ts",
     });
-    expect(parseCliArgs(["impact-cone", "--path", "src/a.ts", "--depth", "zero"], "/repo")).toEqual({
-      ok: false,
-      exitCode: 2,
-      message: "Invalid --depth value: zero\n\nExample: codemem impact-cone --path src/index.ts --depth 2",
-    });
+    expect(parseCliArgs(["impact-cone", "--path", "src/a.ts", "--depth", "zero"], "/repo")).toEqual(
+      {
+        ok: false,
+        exitCode: 2,
+        message:
+          "Invalid --depth value: zero\n\nExample: codemem impact-cone --path src/index.ts --depth 2",
+      },
+    );
   });
 });
 
@@ -330,6 +376,53 @@ describe("runCodeMemCli", () => {
       stateDirectory: "/repo/.git/codemem",
       protocolVersion: 1,
     });
+  });
+
+  test("prints doctor as json with pass status", async () => {
+    const stdout: string[] = [];
+    const runtime: CliRuntime = {
+      async status() {
+        return {
+          health: {
+            protocolVersion: 1,
+            schemaVersion: 1,
+            daemonVersion: "0.1.0",
+            projectRoot: "/repo",
+            startedAtUnixMs: 1,
+            healthy: true,
+            queueDepth: 0,
+            indexedFiles: 2,
+            findingsCacheEntries: 0,
+          },
+          stateDirectory: "/repo/.git/codemem",
+          protocolVersion: 1,
+        };
+      },
+      async check() {
+        throw new Error("check should not run");
+      },
+      async driftMap() {
+        throw new Error("drift-map should not run");
+      },
+      async conflicts() {
+        throw new Error("conflicts should not run");
+      },
+      async maintain() {
+        throw new Error("maintain should not run");
+      },
+      async rebuild() {
+        throw new Error("rebuild should not run");
+      },
+    };
+
+    const exitCode = await runCodeMemCli(["doctor", "--json", "--project-root", "/repo"], {
+      cwd: "/repo",
+      runtime,
+      stdout: (line) => stdout.push(line),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.join("\n")).status).toBe("pass");
   });
 
   test("prints maintain dry-run result as json", async () => {

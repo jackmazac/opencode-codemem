@@ -7,18 +7,24 @@
     "packages/codemem-plugin"
   ],
   "scripts": {
-    "build:ts": "tsc -b packages/codemem-shared packages/codemem-plugin --pretty false",
+    "build:ts": "tsgo -b packages/codemem-shared packages/codemem-plugin --pretty false",
     "build:daemon": "cargo build --release --manifest-path packages/codemem-daemon/Cargo.toml",
     "build": "bun run build:ts && bun run build:daemon",
-    "typecheck": "tsc -b packages/codemem-shared packages/codemem-plugin --pretty false",
+    "typecheck": "tsgo -b packages/codemem-shared packages/codemem-plugin --pretty false",
+    "lint:no-zod": "bun run ./node_modules/@jackmazac/opencode-host-adapter/src/cli/check-no-zod-import.ts packages/codemem-plugin/src/",
     "test:ts": "bun test",
     "test:daemon": "cargo test --manifest-path packages/codemem-daemon/Cargo.toml",
     "test": "bun run test:ts && bun run test:daemon",
+    "bench": "bun ./scripts/bench.ts --project-root . --json",
+    "bench:quick": "bun ./scripts/bench.ts --project-root . --quick --json",
+    "bench:threshold": "bun ./scripts/bench-threshold.ts --json",
+    "smoke:packaged": "bun ./scripts/smoke-packaged.ts --json",
     "package:local": "bun ./scripts/package-local.mjs",
-    "verify": "bun run typecheck && bun run test && bun run build && bun run package:local",
+    "verify": "bun run lint:no-zod && bun run typecheck && bun run test && bun run build && bun run package:local",
     "clean": "node ./scripts/clean.mjs"
   },
   "devDependencies": {
-    "typescript": "^5.8.3"
+    "@jackmazac/opencode-host-adapter": "file:/Users/jack.mazac/Developer/opencode-host-adapter",
+    "@typescript/native-preview": "latest"
   }
 }

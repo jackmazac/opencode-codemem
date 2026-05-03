@@ -17,16 +17,15 @@
       "ES2022",
       "DOM"
     ],
-    "baseUrl": ".",
     "paths": {
       "@codemem/shared/*": [
-        "packages/codemem-shared/src/*"
+        "./packages/codemem-shared/src/*"
       ],
       "@codemem/shared": [
-        "packages/codemem-shared/src/index.ts"
+        "./packages/codemem-shared/src/index.ts"
       ],
       "@opencode-ai/plugin": [
-        "node_modules/@opencode-ai/plugin/dist/index.d.ts"
+        "./node_modules/@opencode-ai/plugin/dist/index.d.ts"
       ]
     }
   }

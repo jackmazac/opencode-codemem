@@ -39,6 +39,10 @@ export type StatusCliCommand = BaseCliCommand & {
   kind: "status";
 };
 
+export type DoctorCliCommand = BaseCliCommand & {
+  kind: "doctor";
+};
+
 export type CheckCliCommand = BaseCliCommand & {
   kind: "check";
   includeEvidence: boolean;
@@ -145,6 +149,7 @@ export type ArtifactEmitCliCommand = BaseCliCommand & {
 
 export type CliCommand =
   | StatusCliCommand
+  | DoctorCliCommand
   | CheckCliCommand
   | DriftMapCliCommand
   | ConflictsCliCommand
@@ -236,6 +241,15 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
         ok: true,
         command: {
           kind: "status",
+          json: options.json,
+          projectRoot: options.projectRoot,
+        },
+      };
+    case "doctor":
+      return {
+        ok: true,
+        command: {
+          kind: "doctor",
           json: options.json,
           projectRoot: options.projectRoot,
         },
@@ -432,7 +446,10 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
   }
 }
 
-export async function runCodeMemCli(argv: string[] = process.argv.slice(2), options: CliRunOptions = {}): Promise<number> {
+export async function runCodeMemCli(
+  argv: string[] = process.argv.slice(2),
+  options: CliRunOptions = {},
+): Promise<number> {
   const stdout = options.stdout ?? ((line: string) => console.log(line));
   const stderr = options.stderr ?? ((line: string) => console.error(line));
   const cwd = options.cwd ?? process.cwd();
@@ -501,7 +518,11 @@ async function createDaemonRuntime(projectRoot: string): Promise<CliRuntime> {
         dryRun: command.dryRun,
       }),
     baselineDiff: async (command) => {
-      const baselinePath = resolveBaselinePath(stateDirectory, command.projectRoot, command.baselinePath);
+      const baselinePath = resolveBaselinePath(
+        stateDirectory,
+        command.projectRoot,
+        command.baselinePath,
+      );
       const baseline = parseFindingBaselineJson(await fs.readFile(baselinePath, "utf8"));
       const current = await client.check({
         projectRoot: command.projectRoot,
@@ -515,7 +536,11 @@ async function createDaemonRuntime(projectRoot: string): Promise<CliRuntime> {
       };
     },
     baselineWrite: async (command) => {
-      const baselinePath = resolveBaselinePath(stateDirectory, command.projectRoot, command.baselinePath);
+      const baselinePath = resolveBaselinePath(
+        stateDirectory,
+        command.projectRoot,
+        command.baselinePath,
+      );
       const current = await client.check({
         projectRoot: command.projectRoot,
         maxFindings: command.maxFindings,
@@ -554,7 +579,11 @@ async function createDaemonRuntime(projectRoot: string): Promise<CliRuntime> {
         maxFindings: command.maxFindings,
       }),
     changeDelta: async (command) => {
-      const baselinePath = resolveBaselinePath(stateDirectory, command.projectRoot, command.baselinePath);
+      const baselinePath = resolveBaselinePath(
+        stateDirectory,
+        command.projectRoot,
+        command.baselinePath,
+      );
       const baseline = parseFindingBaselineJson(await fs.readFile(baselinePath, "utf8"));
       const current = await client.check({
         projectRoot: command.projectRoot,
@@ -589,6 +618,12 @@ async function executeAndFormat(command: CliCommand, runtime: CliRuntime): Promi
     case "status": {
       const result = await runtime.status(command.projectRoot);
       return command.json ? JSON.stringify(result, null, 2) : formatStatus(result);
+    }
+    case "doctor": {
+      const result = await runtime.status(command.projectRoot);
+      return command.json
+        ? JSON.stringify({ status: "pass", ...result }, null, 2)
+        : formatDoctor(result);
     }
     case "check": {
       const result = await runtime.check(command);
@@ -653,7 +688,9 @@ async function executeAndFormat(command: CliCommand, runtime: CliRuntime): Promi
       if (!finding) {
         throw new Error(`finding not found in latest check: ${command.findingId}`);
       }
-      return command.json ? JSON.stringify({ explanation: explainFinding(finding), finding }, null, 2) : explainFinding(finding);
+      return command.json
+        ? JSON.stringify({ explanation: explainFinding(finding), finding }, null, 2)
+        : explainFinding(finding);
     }
     case "report": {
       const check = await runtime.check(checkCommandFor(command));
@@ -682,7 +719,10 @@ async function executeAndFormat(command: CliCommand, runtime: CliRuntime): Promi
   }
 }
 
-async function emitArtifact(command: ArtifactEmitCliCommand, findings: CheckResponse["findings"]): Promise<ArtifactEmitResponse> {
+async function emitArtifact(
+  command: ArtifactEmitCliCommand,
+  findings: CheckResponse["findings"],
+): Promise<ArtifactEmitResponse> {
   if (command.artifactKind === "journal") {
     const entry = createCodememJournalEntry(findings);
     const dest = path.join(command.projectRoot, ".opencode", "journal.jsonl");
@@ -730,6 +770,10 @@ function formatStatus(status: StatusResponse): string {
     `files_indexed: ${status.health.indexedFiles}`,
     `queue_depth: ${status.health.queueDepth}`,
   ].join("\n");
+}
+
+function formatDoctor(status: StatusResponse): string {
+  return [`status: pass`, ...formatStatus(status).split("\n")].join("\n");
 }
 
 function formatCheck(check: CheckResponse): string {
@@ -810,7 +854,9 @@ function formatReviewFocus(changeRisk: ChangeRiskResponse): string {
     `level: ${changeRisk.level}`,
     `score: ${changeRisk.score}`,
     `focus: ${changeRisk.focus.length}`,
-    ...changeRisk.focus.map((item) => `${item.severity} ${item.targetKind} ${item.target}: ${item.reasons.join(",")}`),
+    ...changeRisk.focus.map(
+      (item) => `${item.severity} ${item.targetKind} ${item.target}: ${item.reasons.join(",")}`,
+    ),
   ].join("\n");
 }
 
@@ -904,14 +950,24 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
         options.compact = true;
         break;
       case "--baseline": {
-        const value = readOptionValue(argv, index, "--baseline", "codemem baseline diff --baseline .codemem/findings-baseline.json");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--baseline",
+          "codemem baseline diff --baseline .codemem/findings-baseline.json",
+        );
         if (!value.ok) return value;
         options.baselinePath = value.value;
         index += 1;
         break;
       }
       case "--id": {
-        const value = readOptionValue(argv, index, "--id", "codemem explain --id dead:src/a.ts:unused");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--id",
+          "codemem explain --id dead:src/a.ts:unused",
+        );
         if (!value.ok) return value;
         options.findingId = value.value;
         index += 1;
@@ -927,7 +983,12 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
         break;
       }
       case "--kind": {
-        const value = readOptionValue(argv, index, "--kind", "codemem artifact --kind audit --apply");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--kind",
+          "codemem artifact --kind audit --apply",
+        );
         if (!value.ok) return value;
         const artifactKind = parseArtifactKind(value.value);
         if (!artifactKind.ok) return artifactKind;
@@ -936,14 +997,24 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
         break;
       }
       case "--slug": {
-        const value = readOptionValue(argv, index, "--slug", "codemem artifact --kind audit --slug codemem-audit --apply");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--slug",
+          "codemem artifact --kind audit --slug codemem-audit --apply",
+        );
         if (!value.ok) return value;
         options.slug = value.value;
         index += 1;
         break;
       }
       case "--project-root": {
-        const value = readOptionValue(argv, index, "--project-root", "codemem status --project-root <path>");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--project-root",
+          "codemem status --project-root <path>",
+        );
         if (!value.ok) return value;
         options.projectRoot = path.resolve(cwd, value.value);
         index += 1;
@@ -957,36 +1028,72 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
         break;
       }
       case "--max-findings": {
-        const value = readOptionValue(argv, index, "--max-findings", "codemem check --max-findings 25");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--max-findings",
+          "codemem check --max-findings 25",
+        );
         if (!value.ok) return value;
-        const parsed = parsePositiveInteger(value.value, "--max-findings", "codemem check --max-findings 25");
+        const parsed = parsePositiveInteger(
+          value.value,
+          "--max-findings",
+          "codemem check --max-findings 25",
+        );
         if (!parsed.ok) return parsed;
         options.maxFindings = parsed.value;
         index += 1;
         break;
       }
       case "--max-exports": {
-        const value = readOptionValue(argv, index, "--max-exports", "codemem api-surface --max-exports 100");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--max-exports",
+          "codemem api-surface --max-exports 100",
+        );
         if (!value.ok) return value;
-        const parsed = parsePositiveInteger(value.value, "--max-exports", "codemem api-surface --max-exports 100");
+        const parsed = parsePositiveInteger(
+          value.value,
+          "--max-exports",
+          "codemem api-surface --max-exports 100",
+        );
         if (!parsed.ok) return parsed;
         options.maxExports = parsed.value;
         index += 1;
         break;
       }
       case "--max-items": {
-        const value = readOptionValue(argv, index, "--max-items", "codemem review-focus --max-items 10");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--max-items",
+          "codemem review-focus --max-items 10",
+        );
         if (!value.ok) return value;
-        const parsed = parsePositiveInteger(value.value, "--max-items", "codemem review-focus --max-items 10");
+        const parsed = parsePositiveInteger(
+          value.value,
+          "--max-items",
+          "codemem review-focus --max-items 10",
+        );
         if (!parsed.ok) return parsed;
         options.maxItems = parsed.value;
         index += 1;
         break;
       }
       case "--depth": {
-        const value = readOptionValue(argv, index, "--depth", "codemem impact-cone --path src/index.ts --depth 2");
+        const value = readOptionValue(
+          argv,
+          index,
+          "--depth",
+          "codemem impact-cone --path src/index.ts --depth 2",
+        );
         if (!value.ok) return value;
-        const parsed = parsePositiveInteger(value.value, "--depth", "codemem impact-cone --path src/index.ts --depth 2");
+        const parsed = parsePositiveInteger(
+          value.value,
+          "--depth",
+          "codemem impact-cone --path src/index.ts --depth 2",
+        );
         if (!parsed.ok) return parsed;
         options.depth = parsed.value;
         index += 1;
@@ -994,7 +1101,12 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
       }
       case "--session-id":
       case "--sessionID": {
-        const value = readOptionValue(argv, index, arg, "codemem conflicts --session-id <session-id>");
+        const value = readOptionValue(
+          argv,
+          index,
+          arg,
+          "codemem conflicts --session-id <session-id>",
+        );
         if (!value.ok) return value;
         options.sessionID = value.value;
         index += 1;
@@ -1015,7 +1127,9 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
   return { ok: true, options };
 }
 
-function checkCommandFor(command: ExplainCliCommand | ReportCliCommand | ArtifactEmitCliCommand): CheckCliCommand {
+function checkCommandFor(
+  command: ExplainCliCommand | ReportCliCommand | ArtifactEmitCliCommand,
+): CheckCliCommand {
   return {
     kind: "check",
     includeEvidence: true,
@@ -1027,7 +1141,9 @@ function checkCommandFor(command: ExplainCliCommand | ReportCliCommand | Artifac
   };
 }
 
-function parseArtifactKind(value: string): { ok: true; value: "audit" | "journal" } | CliErrorResult {
+function parseArtifactKind(
+  value: string,
+): { ok: true; value: "audit" | "journal" } | CliErrorResult {
   if (value === "audit" || value === "journal") {
     return { ok: true, value };
   }
@@ -1088,14 +1204,22 @@ function parseBaselineCommand(argv: string[], cwd: string): CliParseResult {
   }
 }
 
-function resolveBaselinePath(stateDirectory: string, projectRoot: string, baselinePath: string | undefined): string {
+function resolveBaselinePath(
+  stateDirectory: string,
+  projectRoot: string,
+  baselinePath: string | undefined,
+): string {
   if (!baselinePath) {
     return path.join(stateDirectory, "findings-baseline.json");
   }
   return path.isAbsolute(baselinePath) ? baselinePath : path.resolve(projectRoot, baselinePath);
 }
 
-function parsePositiveInteger(value: string, flag: string, example: string): { ok: true; value: number } | CliErrorResult {
+function parsePositiveInteger(
+  value: string,
+  flag: string,
+  example: string,
+): { ok: true; value: number } | CliErrorResult {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     return {
@@ -1107,13 +1231,20 @@ function parsePositiveInteger(value: string, flag: string, example: string): { o
   return { ok: true, value: parsed };
 }
 
-function readOptionValue(argv: string[], index: number, flag: string, example: string): { ok: true; value: string } | CliErrorResult {
+function readOptionValue(
+  argv: string[],
+  index: number,
+  flag: string,
+  example: string,
+): { ok: true; value: string } | CliErrorResult {
   const value = argv[index + 1];
   if (!value || value.startsWith("-")) return missingValue(flag, example);
   return { ok: true, value };
 }
 
-function parseReportFormat(value: string): { ok: true; value: "json" | "markdown" | "sarif" } | CliErrorResult {
+function parseReportFormat(
+  value: string,
+): { ok: true; value: "json" | "markdown" | "sarif" } | CliErrorResult {
   if (value === "json" || value === "markdown" || value === "sarif") {
     return { ok: true, value };
   }
@@ -1130,13 +1261,17 @@ function firstPath(options: ParsedOptions): { ok: true; value: string } | CliErr
     return {
       ok: false,
       exitCode: 2,
-      message: "Missing --path for impact-cone\n\nExample: codemem impact-cone --path src/index.ts --depth 2",
+      message:
+        "Missing --path for impact-cone\n\nExample: codemem impact-cone --path src/index.ts --depth 2",
     };
   }
   return { ok: true, value: path };
 }
 
-function requiredPaths(options: ParsedOptions, commandName: string): { ok: true; value: string[] } | CliErrorResult {
+function requiredPaths(
+  options: ParsedOptions,
+  commandName: string,
+): { ok: true; value: string[] } | CliErrorResult {
   if (options.paths.length === 0) {
     return {
       ok: false,
@@ -1164,6 +1299,7 @@ function rootHelp(): string {
     "Usage: codemem <command> [options]",
     "",
     "Commands:",
+    "  doctor      Run fleet-standard health check",
     "  status      Show daemon and index status",
     "  check       Run analysis.check",
     "  drift-map   Run analysis.driftMap",
@@ -1203,6 +1339,7 @@ function rootHelp(): string {
     "  --slug <slug>           Audit artifact slug",
     "",
     "Examples:",
+    "  codemem doctor --json",
     "  codemem status --json",
     "  codemem check --path src/index.ts --max-findings 25 --json",
     "  codemem drift-map --max-findings 50 --json",
@@ -1231,11 +1368,11 @@ if (isCliEntrypoint(process.argv[1])) {
 
 function isCliEntrypoint(argvPath: string | undefined): boolean {
   return Boolean(
-    argvPath?.endsWith("/cli.ts")
-      || argvPath?.endsWith("\\cli.ts")
-      || argvPath?.endsWith("/cli.js")
-      || argvPath?.endsWith("\\cli.js")
-      || argvPath?.endsWith("/codemem")
-      || argvPath?.endsWith("\\codemem"),
+    argvPath?.endsWith("/cli.ts") ||
+    argvPath?.endsWith("\\cli.ts") ||
+    argvPath?.endsWith("/cli.js") ||
+    argvPath?.endsWith("\\cli.js") ||
+    argvPath?.endsWith("/codemem") ||
+    argvPath?.endsWith("\\codemem"),
   );
 }

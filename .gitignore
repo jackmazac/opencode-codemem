@@ -21,6 +21,7 @@ artifacts/
 packages/codemem-plugin/bin/
 
 # Logs and coverage
+bench/results/
 coverage/
 *.log
 
