@@ -8,6 +8,9 @@
     "dist",
     "package.json"
   ],
+  "dependencies": {
+    "@jackmazac/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

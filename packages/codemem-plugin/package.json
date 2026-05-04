@@ -14,6 +14,7 @@
   ],
   "dependencies": {
     "@codemem/shared": "0.1.0",
+    "@jackmazac/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts",
     "@opencode-ai/plugin": "1.14.31"
   },
   "exports": {

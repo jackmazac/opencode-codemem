@@ -6,6 +6,7 @@ use crate::{
         RebuildSummary,
     },
     model::{DriftMap, Evidence, Finding, Severity, StoreStats},
+    protocol::FleetCorrelation,
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -67,7 +68,7 @@ struct HealthParams {
     project_root: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FilesChangedParams {
     project_root: String,
@@ -78,9 +79,11 @@ struct FilesChangedParams {
     #[serde(rename = "turnID")]
     turn_id: Option<String>,
     observed_at_unix_ms: i64,
+    #[serde(default, flatten)]
+    correlation: FleetCorrelation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CheckParams {
     project_root: String,
@@ -90,34 +93,42 @@ struct CheckParams {
     max_findings: usize,
     include_evidence: bool,
     wait_for_fresh_index: bool,
+    #[serde(default, flatten)]
+    correlation: FleetCorrelation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DriftMapParams {
     project_root: String,
     #[serde(rename = "sessionID")]
     session_id: Option<String>,
     max_findings: usize,
+    #[serde(default, flatten)]
+    correlation: FleetCorrelation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConflictsParams {
     project_root: String,
     #[serde(rename = "sessionID")]
     session_id: Option<String>,
+    #[serde(default, flatten)]
+    correlation: FleetCorrelation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ImpactConeParams {
     project_root: String,
     path: String,
     depth: usize,
+    #[serde(default, flatten)]
+    correlation: FleetCorrelation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChangeRiskParams {
     project_root: String,
@@ -126,20 +137,26 @@ struct ChangeRiskParams {
     max_findings: usize,
     #[serde(rename = "sessionID")]
     session_id: Option<String>,
+    #[serde(default, flatten)]
+    correlation: FleetCorrelation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApiSurfaceParams {
     project_root: String,
     max_exports: usize,
+    #[serde(default, flatten)]
+    correlation: FleetCorrelation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LayerBoundariesParams {
     project_root: String,
     max_findings: usize,
+    #[serde(default, flatten)]
+    correlation: FleetCorrelation,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1023,8 +1040,9 @@ fn finding_to_value(finding: Finding, include_evidence: bool) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChangeRiskParams, FilesChangedParams, RequestEnvelope, RpcContext, deserialize_params,
-        dispatch, finding_to_value,
+        ApiSurfaceParams, ChangeRiskParams, CheckParams, ConflictsParams, DriftMapParams,
+        FilesChangedParams, ImpactConeParams, LayerBoundariesParams, RequestEnvelope, RpcContext,
+        deserialize_params, dispatch, finding_to_value,
     };
     use crate::{
         config::ProjectConfig,
@@ -1095,7 +1113,10 @@ mod tests {
                 "files": ["src/index.ts"],
                 "reason": "tool",
                 "turnID": "turn-7",
-                "observedAtUnixMs": 1234
+                "observedAtUnixMs": 1234,
+                "workspace_id": "workspace-a",
+                "correlation_id": "corr-a",
+                "tool_call_id": "tool-call-a"
             }),
             None,
             1,
@@ -1104,6 +1125,9 @@ mod tests {
 
         assert_eq!(params.session_id, "session-a");
         assert_eq!(params.turn_id.as_deref(), Some("turn-7"));
+        assert_eq!(params.correlation.workspace_id.as_deref(), Some("workspace-a"));
+        assert_eq!(params.correlation.correlation_id.as_deref(), Some("corr-a"));
+        assert_eq!(params.correlation.tool_call_id.as_deref(), Some("tool-call-a"));
     }
 
     #[test]
@@ -1114,7 +1138,11 @@ mod tests {
                 "paths": ["src/index.ts"],
                 "depth": 2,
                 "maxFindings": 25,
-                "sessionID": "session-a"
+                "sessionID": "session-a",
+                "plan_id": "plan-a",
+                "wave_id": "W5",
+                "agent_run_id": "agent-run-a",
+                "artifact_ref": "artifact-a"
             }),
             None,
             1,
@@ -1123,6 +1151,116 @@ mod tests {
 
         assert_eq!(params.session_id.as_deref(), Some("session-a"));
         assert_eq!(params.paths, vec!["src/index.ts"]);
+        assert_eq!(params.correlation.plan_id.as_deref(), Some("plan-a"));
+        assert_eq!(params.correlation.wave_id.as_deref(), Some("W5"));
+        assert_eq!(params.correlation.agent_run_id.as_deref(), Some("agent-run-a"));
+        assert_eq!(params.correlation.artifact_ref.as_deref(), Some("artifact-a"));
+    }
+
+    #[test]
+    fn analysis_params_round_trip_fleet_correlation() {
+        let base_correlation = json!({
+            "workspace_id": "workspace-a",
+            "plan_id": "plan-a",
+            "wave_id": "W5",
+            "agent_run_id": "agent-run-a",
+            "correlation_id": "corr-a",
+            "tool_call_id": "tool-call-a",
+            "artifact_ref": "artifact-a"
+        });
+
+        let check = deserialize_params::<CheckParams>(
+            &merge_json(
+                json!({
+                    "projectRoot": "/tmp/project",
+                    "maxFindings": 25,
+                    "includeEvidence": true,
+                    "waitForFreshIndex": false
+                }),
+                base_correlation.clone(),
+            ),
+            None,
+            1,
+        )
+        .expect("deserialize check params");
+        assert_fleet_correlation(serde_json::to_value(check).expect("serialize check params"));
+
+        let drift_map = deserialize_params::<DriftMapParams>(
+            &merge_json(
+                json!({ "projectRoot": "/tmp/project", "maxFindings": 25 }),
+                base_correlation.clone(),
+            ),
+            None,
+            1,
+        )
+        .expect("deserialize drift map params");
+        assert_fleet_correlation(serde_json::to_value(drift_map).expect("serialize drift map params"));
+
+        let conflicts = deserialize_params::<ConflictsParams>(
+            &merge_json(json!({ "projectRoot": "/tmp/project" }), base_correlation.clone()),
+            None,
+            1,
+        )
+        .expect("deserialize conflicts params");
+        assert_fleet_correlation(serde_json::to_value(conflicts).expect("serialize conflicts params"));
+
+        let impact_cone = deserialize_params::<ImpactConeParams>(
+            &merge_json(
+                json!({ "projectRoot": "/tmp/project", "path": "src/index.ts", "depth": 2 }),
+                base_correlation.clone(),
+            ),
+            None,
+            1,
+        )
+        .expect("deserialize impact cone params");
+        assert_fleet_correlation(
+            serde_json::to_value(impact_cone).expect("serialize impact cone params"),
+        );
+
+        let api_surface = deserialize_params::<ApiSurfaceParams>(
+            &merge_json(
+                json!({ "projectRoot": "/tmp/project", "maxExports": 25 }),
+                base_correlation.clone(),
+            ),
+            None,
+            1,
+        )
+        .expect("deserialize api surface params");
+        assert_fleet_correlation(
+            serde_json::to_value(api_surface).expect("serialize api surface params"),
+        );
+
+        let layer_boundaries = deserialize_params::<LayerBoundariesParams>(
+            &merge_json(
+                json!({ "projectRoot": "/tmp/project", "maxFindings": 25 }),
+                base_correlation,
+            ),
+            None,
+            1,
+        )
+        .expect("deserialize layer boundaries params");
+        assert_fleet_correlation(
+            serde_json::to_value(layer_boundaries).expect("serialize layer boundaries params"),
+        );
+    }
+
+    fn assert_fleet_correlation(value: serde_json::Value) {
+        assert_eq!(value["workspace_id"], "workspace-a");
+        assert_eq!(value["plan_id"], "plan-a");
+        assert_eq!(value["wave_id"], "W5");
+        assert_eq!(value["agent_run_id"], "agent-run-a");
+        assert_eq!(value["correlation_id"], "corr-a");
+        assert_eq!(value["tool_call_id"], "tool-call-a");
+        assert_eq!(value["artifact_ref"], "artifact-a");
+    }
+
+    fn merge_json(mut left: serde_json::Value, right: serde_json::Value) -> serde_json::Value {
+        let left_object = left.as_object_mut().expect("left JSON object");
+        let right_object = right.as_object().expect("right JSON object");
+        for (key, value) in right_object {
+            left_object.insert(key.clone(), value.clone());
+        }
+        left
     }
 
     #[test]

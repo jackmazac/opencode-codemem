@@ -81,6 +81,41 @@ function runQuickBenches(projectRoot: string): BenchResult[] {
       ["bun", cli, "check", "--project-root", projectRoot, "--max-findings", "50", "--json"],
       projectRoot,
     ),
+    runBench(
+      "api_surface",
+      ["bun", cli, "api-surface", "--project-root", projectRoot, "--max-exports", "100", "--json"],
+      projectRoot,
+    ),
+    runBench(
+      "impact_cone",
+      [
+        "bun",
+        cli,
+        "impact-cone",
+        "--project-root",
+        projectRoot,
+        "--path",
+        "packages/codemem-shared/src/protocol.ts",
+        "--depth",
+        "2",
+        "--json",
+      ],
+      projectRoot,
+    ),
+    runBench(
+      "layer_boundaries",
+      [
+        "bun",
+        cli,
+        "layer-boundaries",
+        "--project-root",
+        projectRoot,
+        "--max-findings",
+        "50",
+        "--json",
+      ],
+      projectRoot,
+    ),
   ];
 }
 

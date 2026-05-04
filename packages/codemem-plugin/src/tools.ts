@@ -1,11 +1,17 @@
 import {
+  type ArtifactEmitResponse,
+  type ArtifactKind,
   compareSeverity,
   type ChangeRiskResponse,
   type CheckResponse,
   type CodeMemFinding,
+  type FleetCorrelation,
 } from "@codemem/shared/protocol";
+import { createCodememAuditArtifact, createCodememJournalEntry } from "@codemem/shared/artifacts";
 import { tool, type ToolDefinition } from "@opencode-ai/plugin";
 import type { LoadedCodeMemConfig } from "@codemem/shared/config";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { DaemonClient } from "./daemon/client";
 
 export type CodeMemToolRuntime = {
@@ -17,6 +23,18 @@ export type CodeMemToolRuntime = {
 
 const z = tool.schema;
 
+type FleetCorrelationArgs = FleetCorrelation;
+
+const fleetCorrelationArgs = {
+  workspace_id: z.string().optional(),
+  plan_id: z.string().optional(),
+  wave_id: z.string().optional(),
+  agent_run_id: z.string().optional(),
+  correlation_id: z.string().optional(),
+  tool_call_id: z.string().optional(),
+  artifact_ref: z.string().optional(),
+};
+
 export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, ToolDefinition> {
   return {
     codemem_check: tool({
@@ -27,13 +45,17 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         includeEvidence: z.boolean().default(true),
         waitForFreshIndex: z.boolean().default(false),
         paths: z.array(z.string()).optional(),
+        ...fleetCorrelationArgs,
       },
-      async execute(args: {
-        maxFindings?: number;
-        includeEvidence?: boolean;
-        waitForFreshIndex?: boolean;
-        paths?: string[];
-      }, context) {
+      async execute(
+        args: {
+          maxFindings?: number;
+          includeEvidence?: boolean;
+          waitForFreshIndex?: boolean;
+          paths?: string[];
+        } & FleetCorrelationArgs,
+        context,
+      ) {
         context.metadata({ title: "codemem check" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
@@ -45,6 +67,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             maxFindings: args.maxFindings ?? config.config.maxFindings,
             includeEvidence: args.includeEvidence ?? true,
             waitForFreshIndex: args.waitForFreshIndex ?? false,
+            ...fleetCorrelationFromArgs(args),
           });
           await runtime.maybeInjectSignals(context.sessionID, response.findings);
           return {
@@ -68,8 +91,9 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         "Return a compact graph of drift-relevant nodes and edges for LLM planning and refactoring.",
       args: {
         maxFindings: z.number().int().min(1).max(200).default(50),
+        ...fleetCorrelationArgs,
       },
-      async execute(args: { maxFindings?: number }, context) {
+      async execute(args: { maxFindings?: number } & FleetCorrelationArgs, context) {
         context.metadata({ title: "codemem drift map" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
@@ -78,6 +102,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             projectRoot: runtime.projectRoot,
             sessionID: context.sessionID,
             maxFindings: args.maxFindings ?? config.config.maxFindings,
+            ...fleetCorrelationFromArgs(args),
           });
           await runtime.maybeInjectSignals(context.sessionID, response.map.findings);
           return {
@@ -99,14 +124,16 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         "Return concurrent-session conflict risk for overlapping dependency cones in the current project.",
       args: {
         includeInfo: z.boolean().default(false),
+        ...fleetCorrelationArgs,
       },
-      async execute(args: { includeInfo?: boolean }, context) {
+      async execute(args: { includeInfo?: boolean } & FleetCorrelationArgs, context) {
         context.metadata({ title: "codemem conflicts" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const response = await client.conflicts({
             projectRoot: runtime.projectRoot,
             sessionID: context.sessionID,
+            ...fleetCorrelationFromArgs(args),
           });
           const filtered = args.includeInfo
             ? response.findings
@@ -129,8 +156,12 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         paths: z.array(z.string()).min(1),
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
+        ...fleetCorrelationArgs,
       },
-      async execute(args: { paths: string[]; depth?: number; maxFindings?: number }, context) {
+      async execute(
+        args: { paths: string[]; depth?: number; maxFindings?: number } & FleetCorrelationArgs,
+        context,
+      ) {
         context.metadata({ title: "codemem change risk" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
@@ -141,6 +172,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             paths: args.paths,
             depth: args.depth ?? 2,
             maxFindings: args.maxFindings ?? config.config.maxFindings,
+            ...fleetCorrelationFromArgs(args),
           });
           return {
             output: JSON.stringify(response),
@@ -159,8 +191,12 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         paths: z.array(z.string()).min(1),
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
+        ...fleetCorrelationArgs,
       },
-      async execute(args: { paths: string[]; depth?: number; maxFindings?: number }, context) {
+      async execute(
+        args: { paths: string[]; depth?: number; maxFindings?: number } & FleetCorrelationArgs,
+        context,
+      ) {
         context.metadata({ title: "codemem before edit" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
@@ -171,6 +207,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             paths: args.paths,
             depth: args.depth ?? 2,
             maxFindings: args.maxFindings ?? config.config.maxFindings,
+            ...fleetCorrelationFromArgs(args),
           });
           return {
             output: JSON.stringify({
@@ -199,8 +236,17 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
         maxItems: z.number().int().min(1).max(50).default(10),
+        ...fleetCorrelationArgs,
       },
-      async execute(args: { paths: string[]; depth?: number; maxFindings?: number; maxItems?: number }, context) {
+      async execute(
+        args: {
+          paths: string[];
+          depth?: number;
+          maxFindings?: number;
+          maxItems?: number;
+        } & FleetCorrelationArgs,
+        context,
+      ) {
         context.metadata({ title: "codemem review focus" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
@@ -211,6 +257,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             paths: args.paths,
             depth: args.depth ?? 2,
             maxFindings: args.maxFindings ?? config.config.maxFindings,
+            ...fleetCorrelationFromArgs(args),
           });
           const maxItems = args.maxItems ?? 10;
           return {
@@ -231,7 +278,203 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         }
       },
     }),
+
+    codemem_api_surface: tool({
+      description:
+        "List the public API surface (exported symbols and signatures) for the current project. Advisory / read-only.",
+      args: {
+        path: z.string().optional(),
+        maxExports: z.number().int().min(1).max(2000).default(100),
+        ...fleetCorrelationArgs,
+      },
+      async execute(args: { path?: string; maxExports?: number } & FleetCorrelationArgs, context) {
+        context.metadata({ title: "codemem api surface" });
+        try {
+          const client = await runtime.ensureReady({ waitForReady: true });
+          const response = await client.apiSurface({
+            projectRoot: runtime.projectRoot,
+            maxExports: args.maxExports ?? 100,
+            ...fleetCorrelationFromArgs(args),
+          });
+          return {
+            output: JSON.stringify(response),
+            metadata: { exports: response.exports.length, total: response.total },
+          };
+        } catch (error) {
+          return { output: JSON.stringify({ error: String(error) }) };
+        }
+      },
+    }),
+
+    codemem_impact_cone: tool({
+      description: "Return the dependency impact cone for a path. Advisory / read-only.",
+      args: {
+        path: z.string(),
+        depth: z.number().int().min(1).max(8).default(2),
+        ...fleetCorrelationArgs,
+      },
+      async execute(args: { path: string; depth?: number } & FleetCorrelationArgs, context) {
+        context.metadata({ title: "codemem impact cone" });
+        try {
+          const client = await runtime.ensureReady({ waitForReady: true });
+          const response = await client.impactCone({
+            projectRoot: runtime.projectRoot,
+            path: args.path,
+            depth: args.depth ?? 2,
+            ...fleetCorrelationFromArgs(args),
+          });
+          return {
+            output: JSON.stringify(response),
+            metadata: { files: response.files.length, depth: response.depth },
+          };
+        } catch (error) {
+          return { output: JSON.stringify({ error: String(error) }) };
+        }
+      },
+    }),
+
+    codemem_layer_boundaries: tool({
+      description:
+        "Report package/layer boundary information and cycle findings. Advisory / read-only.",
+      args: {
+        maxFindings: z.number().int().min(1).max(200).default(50),
+        ...fleetCorrelationArgs,
+      },
+      async execute(args: { maxFindings?: number } & FleetCorrelationArgs, context) {
+        context.metadata({ title: "codemem layer boundaries" });
+        try {
+          const client = await runtime.ensureReady({ waitForReady: true });
+          const config = await runtime.getConfig();
+          const response = await client.layerBoundaries({
+            projectRoot: runtime.projectRoot,
+            maxFindings: args.maxFindings ?? config.config.maxFindings,
+            ...fleetCorrelationFromArgs(args),
+          });
+          return {
+            output: JSON.stringify(response),
+            metadata: { boundaries: response.boundaries.length, cycles: response.cycles.length },
+          };
+        } catch (error) {
+          return { output: JSON.stringify({ error: String(error) }) };
+        }
+      },
+    }),
+
+    codemem_artifact: tool({
+      description:
+        "Create or preview a Codemem audit or journal artifact from current findings. Advisory; dry-run by default.",
+      args: {
+        kind: z.enum(["audit", "journal"]),
+        slug: z.string().optional(),
+        maxFindings: z.number().int().min(1).max(200).default(50),
+        dryRun: z.boolean().default(true),
+        ...fleetCorrelationArgs,
+      },
+      async execute(
+        args: {
+          kind: ArtifactKind;
+          slug?: string;
+          maxFindings?: number;
+          dryRun?: boolean;
+        } & FleetCorrelationArgs,
+        context,
+      ) {
+        context.metadata({ title: "codemem artifact" });
+        try {
+          const client = await runtime.ensureReady({ waitForReady: true });
+          const config = await runtime.getConfig();
+          const maxFindings = args.maxFindings ?? config.config.maxFindings;
+          const check = await client.check({
+            projectRoot: runtime.projectRoot,
+            sessionID: context.sessionID,
+            paths: [],
+            maxFindings,
+            includeEvidence: true,
+            waitForFreshIndex: true,
+            ...fleetCorrelationFromArgs(args),
+          });
+          const response = await emitArtifact({
+            artifactKind: args.kind,
+            dryRun: args.dryRun ?? true,
+            maxFindings,
+            projectRoot: runtime.projectRoot,
+            slug: args.slug,
+            findings: check.findings,
+          });
+          return {
+            output: JSON.stringify(response),
+            metadata: { findings: response.findings, applied: response.applied },
+          };
+        } catch (error) {
+          return { output: JSON.stringify({ error: String(error) }) };
+        }
+      },
+    }),
   };
+}
+
+function fleetCorrelationFromArgs(args: FleetCorrelationArgs): FleetCorrelation {
+  return {
+    workspace_id: args.workspace_id,
+    plan_id: args.plan_id,
+    wave_id: args.wave_id,
+    agent_run_id: args.agent_run_id,
+    correlation_id: args.correlation_id,
+    tool_call_id: args.tool_call_id,
+    artifact_ref: args.artifact_ref,
+  };
+}
+
+type EmitArtifactOptions = {
+  artifactKind: ArtifactKind;
+  dryRun: boolean;
+  maxFindings: number;
+  projectRoot: string;
+  slug?: string;
+  findings: CodeMemFinding[];
+};
+
+async function emitArtifact(options: EmitArtifactOptions): Promise<ArtifactEmitResponse> {
+  if (options.artifactKind === "journal") {
+    const entry = createCodememJournalEntry(options.findings.slice(0, options.maxFindings));
+    const relativePath = ".opencode/journal.jsonl";
+    const outputPath = path.join(options.projectRoot, relativePath);
+    if (!options.dryRun) {
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
+      await fs.appendFile(outputPath, `${JSON.stringify(entry)}\n`);
+    }
+    return {
+      artifactKind: options.artifactKind,
+      applied: !options.dryRun,
+      entry,
+      findings: options.findings.length,
+      path: relativePath,
+    };
+  }
+
+  const slug = options.slug ?? "codemem-audit";
+  validateArtifactSlug(slug);
+  const relativePath = path.join(".opencode", "audits", `${slug}.md`);
+  const outputPath = path.join(options.projectRoot, relativePath);
+  if (!options.dryRun) {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(
+      outputPath,
+      createCodememAuditArtifact(options.findings.slice(0, options.maxFindings)),
+    );
+  }
+  return {
+    artifactKind: options.artifactKind,
+    applied: !options.dryRun,
+    findings: options.findings.length,
+    path: relativePath,
+  };
+}
+
+function validateArtifactSlug(slug: string): void {
+  if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(slug)) {
+    throw new Error("artifact slug must be 1-31 lowercase letters, digits, or hyphens");
+  }
 }
 
 function summarizeCheckResponse(response: CheckResponse): Record<string, number | boolean> {

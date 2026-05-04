@@ -3,6 +3,7 @@ mod detectors;
 mod graph;
 mod indexer;
 mod model;
+mod protocol;
 mod rpc;
 mod session_conflicts;
 mod store;

@@ -30,7 +30,7 @@ bun run verify
 This runs TypeScript typecheck, Bun tests, Rust tests, the release daemon build, and local package creation. Package artifacts are written to `artifacts/`:
 
 - `artifacts/codemem-shared-0.1.0.tgz`
-- `artifacts/codemem-plugin-0.1.0.tgz`
+- `artifacts/codemem-plugin-0.1.1.tgz`
 
 The plugin package includes:
 
@@ -45,7 +45,7 @@ Add both local tarballs as dependencies in `~/.config/opencode/package.json`:
 {
   "dependencies": {
     "@codemem/shared": "file:/absolute/path/to/codemem/artifacts/codemem-shared-0.1.0.tgz",
-    "@codemem/plugin": "file:/absolute/path/to/codemem/artifacts/codemem-plugin-0.1.0.tgz"
+    "@codemem/plugin": "file:/absolute/path/to/codemem/artifacts/codemem-plugin-0.1.1.tgz"
   }
 }
 ```

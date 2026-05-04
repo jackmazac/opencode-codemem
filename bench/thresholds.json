@@ -2,7 +2,10 @@
   "schema_version": 1,
   "quick": [
     { "name": "status", "max_ms": 1000 },
-    { "name": "check", "max_ms": 1500 }
+    { "name": "check", "max_ms": 1500 },
+    { "name": "api_surface", "max_ms": 1500 },
+    { "name": "impact_cone", "max_ms": 1500 },
+    { "name": "layer_boundaries", "max_ms": 1500 }
   ],
   "full": [
     { "name": "status-cold", "max_ms": 1500 },

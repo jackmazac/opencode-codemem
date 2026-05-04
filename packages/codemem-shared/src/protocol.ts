@@ -155,6 +155,16 @@ export type RpcErrorEnvelope = {
   details?: Record<string, unknown>;
 };
 
+export type FleetCorrelation = {
+  workspace_id?: string;
+  plan_id?: string;
+  wave_id?: string;
+  agent_run_id?: string;
+  correlation_id?: string;
+  tool_call_id?: string;
+  artifact_ref?: string;
+};
+
 export type HealthRequest = {
   projectRoot: string;
 };
@@ -171,7 +181,7 @@ export type HealthResponse = {
   findingsCacheEntries: number;
 };
 
-export type FilesChangedNotification = {
+export type FilesChangedNotification = FleetCorrelation & {
   projectRoot: string;
   sessionID: string;
   files: string[];
@@ -180,7 +190,7 @@ export type FilesChangedNotification = {
   observedAtUnixMs: number;
 };
 
-export type CheckRequest = {
+export type CheckRequest = FleetCorrelation & {
   projectRoot: string;
   sessionID?: string;
   paths?: string[];
@@ -202,7 +212,7 @@ export type CheckResponse = {
   };
 };
 
-export type DriftMapRequest = {
+export type DriftMapRequest = FleetCorrelation & {
   projectRoot: string;
   sessionID?: string;
   maxFindings: number;
@@ -213,7 +223,7 @@ export type DriftMapResponse = {
   indexedAtUnixMs: number;
 };
 
-export type ConflictsRequest = {
+export type ConflictsRequest = FleetCorrelation & {
   projectRoot: string;
   sessionID?: string;
 };
@@ -255,7 +265,7 @@ export type RebuildResponse = {
   reason: string;
 };
 
-export type ImpactConeRequest = {
+export type ImpactConeRequest = FleetCorrelation & {
   projectRoot: string;
   path: string;
   depth: number;
@@ -268,7 +278,7 @@ export type ImpactConeResponse = {
   indexedAtUnixMs: number;
 };
 
-export type ChangeRiskRequest = {
+export type ChangeRiskRequest = FleetCorrelation & {
   projectRoot: string;
   paths: string[];
   depth: number;
@@ -294,7 +304,7 @@ export type ChangeRiskResponse = {
   };
 };
 
-export type ApiSurfaceRequest = {
+export type ApiSurfaceRequest = FleetCorrelation & {
   projectRoot: string;
   maxExports: number;
 };
@@ -306,9 +316,27 @@ export type ApiSurfaceResponse = {
   indexedAtUnixMs: number;
 };
 
-export type LayerBoundariesRequest = {
+export type LayerBoundariesRequest = FleetCorrelation & {
   projectRoot: string;
   maxFindings: number;
+};
+
+export type ArtifactKind = "audit" | "journal";
+
+export type ArtifactEmitRequest = FleetCorrelation & {
+  projectRoot: string;
+  kind: ArtifactKind;
+  slug?: string;
+  maxFindings: number;
+  dryRun: boolean;
+};
+
+export type ArtifactEmitResponse = {
+  artifactKind: ArtifactKind;
+  applied: boolean;
+  path: string;
+  findings: number;
+  entry?: unknown;
 };
 
 export type LayerBoundariesResponse = {
@@ -381,7 +409,12 @@ export function createRpcRequest<M extends RpcMethod>(
   return {
     jsonrpc: "2.0",
     protocolVersion: CODEMEM_PROTOCOL_VERSION,
-    id: createRequestId(method.replace(/[^a-z]/gi, "").slice(0, 6).toLowerCase() || "cm"),
+    id: createRequestId(
+      method
+        .replace(/[^a-z]/gi, "")
+        .slice(0, 6)
+        .toLowerCase() || "cm",
+    ),
     authToken,
     method,
     params,
@@ -411,11 +444,15 @@ export function createRpcError(
   return { code, message, retryable, details };
 }
 
-export function isRpcErrorResponse(response: RpcResponseEnvelope): response is RpcResponseEnvelope & { error: RpcErrorEnvelope } {
+export function isRpcErrorResponse(
+  response: RpcResponseEnvelope,
+): response is RpcResponseEnvelope & { error: RpcErrorEnvelope } {
   return Boolean(response.error);
 }
 
-export function encodeFrame(message: RpcRequestEnvelope | RpcNotificationEnvelope | RpcResponseEnvelope): Buffer {
+export function encodeFrame(
+  message: RpcRequestEnvelope | RpcNotificationEnvelope | RpcResponseEnvelope,
+): Buffer {
   const payload = Buffer.from(JSON.stringify(message), "utf8");
   const prefix = Buffer.allocUnsafe(4);
   prefix.writeUInt32BE(payload.length, 0);

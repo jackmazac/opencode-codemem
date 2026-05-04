@@ -19,11 +19,13 @@
     "bench:quick": "bun ./scripts/bench.ts --project-root . --quick --json",
     "bench:threshold": "bun ./scripts/bench-threshold.ts --json",
     "smoke:packaged": "bun ./scripts/smoke-packaged.ts --json",
+    "smoke:runtime": "bun ./scripts/runtime-smoke.ts",
     "package:local": "bun ./scripts/package-local.mjs",
     "verify": "bun run lint:no-zod && bun run typecheck && bun run test && bun run build && bun run package:local",
     "clean": "node ./scripts/clean.mjs"
   },
   "devDependencies": {
+    "@jackmazac/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts",
     "@jackmazac/opencode-host-adapter": "file:/Users/jack.mazac/Developer/opencode-host-adapter",
     "@typescript/native-preview": "latest"
   }
