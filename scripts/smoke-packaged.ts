@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { validateHealthReport } from "@jackmazac/opencode-fleet-contracts";
 
 type SmokeStep = { name: string; ok: boolean; detail: string };
 
@@ -38,6 +39,8 @@ try {
         dependencies: {
           "@codemem/shared": `file:${sharedTgz}`,
           "@codemem/plugin": `file:${pluginTgz}`,
+          "@jackmazac/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts",
+          "@jackmazac/opencode-host-adapter": "file:/Users/jack.mazac/Developer/opencode-host-adapter",
         },
         overrides: { "@codemem/shared": `file:${sharedTgz}` },
       },
@@ -54,17 +57,20 @@ try {
   steps.push({ name: "codemem bin linked", ok: true, detail: bin });
 
   const doctor = run(bin, ["doctor", "--project-root", projectRoot, "--json"], configRoot);
-  const doctorJson = JSON.parse(doctor.stdout) as { status?: string };
-  assert.equal(doctorJson.status, "pass");
-  steps.push({ name: "doctor", ok: true, detail: "pass" });
+  const doctorJson: unknown = JSON.parse(doctor.stdout);
+  const doctorValidation = validateHealthReport(doctorJson);
+  assert.equal(doctorValidation.ok, true);
+  if (!doctorValidation.ok) throw new Error(doctorValidation.errors.join("; "));
+  assert.notEqual(doctorValidation.value.status, "fail");
+  steps.push({ name: "doctor", ok: true, detail: doctorValidation.value.status });
 
   const check = run(
     bin,
     ["check", "--project-root", projectRoot, "--max-findings", "10", "--json"],
     configRoot,
   );
-  const checkJson = JSON.parse(check.stdout) as { findings?: unknown[] };
-  assert(Array.isArray(checkJson.findings), "check response must include findings array");
+  const checkJson: unknown = JSON.parse(check.stdout);
+  assertCheckResponse(checkJson);
   steps.push({ name: "check", ok: true, detail: `${checkJson.findings.length} findings` });
 
   const report = { ok: true, temp, projectRoot, configRoot, steps };
@@ -94,4 +100,13 @@ function run(command: string, args: string[], cwd: string): { stdout: string } {
     );
   }
   return { stdout };
+}
+
+function assertCheckResponse(value: unknown): asserts value is { findings: unknown[] } {
+  assert(isRecord(value), "check response must be an object");
+  assert(Array.isArray(value.findings), "check response must include findings array");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

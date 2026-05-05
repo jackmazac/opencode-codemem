@@ -5,6 +5,8 @@ import {
   type ChangeRiskResponse,
   type CheckResponse,
   type CodeMemFinding,
+  type CodeMemToolErrorCode,
+  type CodeMemToolErrorResponse,
   type FleetCorrelation,
 } from "@codemem/shared/protocol";
 import { createCodememAuditArtifact, createCodememJournalEntry } from "@codemem/shared/artifacts";
@@ -28,11 +30,16 @@ type FleetCorrelationArgs = FleetCorrelation;
 const fleetCorrelationArgs = {
   workspace_id: z.string().optional(),
   plan_id: z.string().optional(),
+  plan_slug: z.string().optional(),
   wave_id: z.string().optional(),
   agent_run_id: z.string().optional(),
   correlation_id: z.string().optional(),
   tool_call_id: z.string().optional(),
   artifact_ref: z.string().optional(),
+  lifecycle_object_id: z.string().optional(),
+  concord_event_id: z.string().optional(),
+  fleet_run_id: z.string().optional(),
+  spine_seq: z.number().int().optional(),
 };
 
 export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, ToolDefinition> {
@@ -56,7 +63,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         } & FleetCorrelationArgs,
         context,
       ) {
-        context.metadata({ title: "codemem check" });
+        setToolMetadata(context, { title: "codemem check" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const config = await runtime.getConfig();
@@ -75,13 +82,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             metadata: summarizeCheckResponse(response),
           };
         } catch (error) {
-          return {
-            output: JSON.stringify({
-              error: String(error),
-              advice:
-                "Ensure codemem-daemon is installed and configured. The plugin intentionally fails closed for direct codemem tool calls.",
-            }),
-          };
+          return toolError(error);
         }
       },
     }),
@@ -94,7 +95,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         ...fleetCorrelationArgs,
       },
       async execute(args: { maxFindings?: number } & FleetCorrelationArgs, context) {
-        context.metadata({ title: "codemem drift map" });
+        setToolMetadata(context, { title: "codemem drift map" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const config = await runtime.getConfig();
@@ -114,7 +115,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             },
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -127,7 +128,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         ...fleetCorrelationArgs,
       },
       async execute(args: { includeInfo?: boolean } & FleetCorrelationArgs, context) {
-        context.metadata({ title: "codemem conflicts" });
+        setToolMetadata(context, { title: "codemem conflicts" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const response = await client.conflicts({
@@ -144,7 +145,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             metadata: { findings: filtered.length },
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -162,7 +163,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         args: { paths: string[]; depth?: number; maxFindings?: number } & FleetCorrelationArgs,
         context,
       ) {
-        context.metadata({ title: "codemem change risk" });
+        setToolMetadata(context, { title: "codemem change risk" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const config = await runtime.getConfig();
@@ -179,7 +180,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             metadata: summarizeChangeRisk(response),
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -197,7 +198,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         args: { paths: string[]; depth?: number; maxFindings?: number } & FleetCorrelationArgs,
         context,
       ) {
-        context.metadata({ title: "codemem before edit" });
+        setToolMetadata(context, { title: "codemem before edit" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const config = await runtime.getConfig();
@@ -223,7 +224,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             metadata: summarizeChangeRisk(response),
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -247,7 +248,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         } & FleetCorrelationArgs,
         context,
       ) {
-        context.metadata({ title: "codemem review focus" });
+        setToolMetadata(context, { title: "codemem review focus" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const config = await runtime.getConfig();
@@ -274,7 +275,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             },
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -288,7 +289,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         ...fleetCorrelationArgs,
       },
       async execute(args: { path?: string; maxExports?: number } & FleetCorrelationArgs, context) {
-        context.metadata({ title: "codemem api surface" });
+        setToolMetadata(context, { title: "codemem api surface" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const response = await client.apiSurface({
@@ -301,7 +302,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             metadata: { exports: response.exports.length, total: response.total },
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -314,7 +315,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         ...fleetCorrelationArgs,
       },
       async execute(args: { path: string; depth?: number } & FleetCorrelationArgs, context) {
-        context.metadata({ title: "codemem impact cone" });
+        setToolMetadata(context, { title: "codemem impact cone" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const response = await client.impactCone({
@@ -328,7 +329,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             metadata: { files: response.files.length, depth: response.depth },
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -341,7 +342,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         ...fleetCorrelationArgs,
       },
       async execute(args: { maxFindings?: number } & FleetCorrelationArgs, context) {
-        context.metadata({ title: "codemem layer boundaries" });
+        setToolMetadata(context, { title: "codemem layer boundaries" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const config = await runtime.getConfig();
@@ -355,7 +356,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             metadata: { boundaries: response.boundaries.length, cycles: response.cycles.length },
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -379,7 +380,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         } & FleetCorrelationArgs,
         context,
       ) {
-        context.metadata({ title: "codemem artifact" });
+        setToolMetadata(context, { title: "codemem artifact" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
           const config = await runtime.getConfig();
@@ -406,7 +407,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             metadata: { findings: response.findings, applied: response.applied },
           };
         } catch (error) {
-          return { output: JSON.stringify({ error: String(error) }) };
+          return toolError(error);
         }
       },
     }),
@@ -417,11 +418,16 @@ function fleetCorrelationFromArgs(args: FleetCorrelationArgs): FleetCorrelation 
   return {
     workspace_id: args.workspace_id,
     plan_id: args.plan_id,
+    plan_slug: args.plan_slug,
     wave_id: args.wave_id,
     agent_run_id: args.agent_run_id,
     correlation_id: args.correlation_id,
     tool_call_id: args.tool_call_id,
     artifact_ref: args.artifact_ref,
+    lifecycle_object_id: args.lifecycle_object_id,
+    concord_event_id: args.concord_event_id,
+    fleet_run_id: args.fleet_run_id,
+    spine_seq: args.spine_seq,
   };
 }
 
@@ -475,6 +481,58 @@ function validateArtifactSlug(slug: string): void {
   if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(slug)) {
     throw new Error("artifact slug must be 1-31 lowercase letters, digits, or hyphens");
   }
+}
+
+function setToolMetadata(
+  context: unknown,
+  metadata: { title?: string; metadata?: Record<string, unknown> },
+): void {
+  if (!isRecord(context) || typeof context.metadata !== "function") {
+    return;
+  }
+  context.metadata(metadata);
+}
+
+function toolError(error: unknown): { output: string } {
+  const message = errorMessage(error);
+  const code = errorCode(message);
+  const payload: CodeMemToolErrorResponse = {
+    status: "degraded",
+    degraded: true,
+    error: {
+      code,
+      message,
+      retryable: isRetryable(code),
+    },
+  };
+  return { output: JSON.stringify(payload) };
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function errorCode(message: string): CodeMemToolErrorCode {
+  const lower = message.toLowerCase();
+  if (lower.includes("timeout")) return "E_CODEMEM_DAEMON_TIMEOUT";
+  if (lower.includes("protocol mismatch")) return "E_CODEMEM_PROTOCOL_MISMATCH";
+  if (lower.includes("project_mismatch") || lower.includes("projectroot does not match")) {
+    return "E_CODEMEM_PROJECT_MISMATCH";
+  }
+  if (lower.includes("payload too large")) return "E_CODEMEM_PAYLOAD_TOO_LARGE";
+  if (lower.includes("unavailable") || lower.includes("unable to resolve") || lower.includes("enoent")) {
+    return "E_CODEMEM_DAEMON_UNAVAILABLE";
+  }
+  return "E_CODEMEM_INTERNAL";
+}
+
+function isRetryable(code: CodeMemToolErrorCode): boolean {
+  return code === "E_CODEMEM_DAEMON_TIMEOUT" || code === "E_CODEMEM_DAEMON_UNAVAILABLE";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function summarizeCheckResponse(response: CheckResponse): Record<string, number | boolean> {

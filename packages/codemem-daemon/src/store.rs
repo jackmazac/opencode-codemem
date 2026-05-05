@@ -2,6 +2,9 @@ use crate::model::{
     CloneFingerprint, FileDocument, ImportEdge, PublicApiSymbol, SessionSnapshot, StoreStats,
     TypeShapeRecord,
 };
+#[cfg(test)]
+use crate::model::IndexJobRecord;
+use crate::protocol::FleetCorrelation;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -269,11 +272,15 @@ impl Store {
     }
 
     pub fn load_public_exports(&self) -> Result<Vec<PublicApiSymbol>> {
+        self.load_public_exports_limited(usize::MAX)
+    }
+
+    pub fn load_public_exports_limited(&self, limit: usize) -> Result<Vec<PublicApiSymbol>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
-            "SELECT export_name, source_file, signature FROM public_exports ORDER BY source_file, export_name",
+            "SELECT export_name, source_file, signature FROM public_exports ORDER BY source_file, export_name LIMIT ?1",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map(params![limit as i64], |row| {
             Ok(PublicApiSymbol {
                 export_name: row.get(0)?,
                 source_file: row.get(1)?,
@@ -281,6 +288,14 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn count_public_exports(&self) -> Result<usize> {
+        let conn = self.connect()?;
+        let count = conn.query_row("SELECT COUNT(*) FROM public_exports", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(count as usize)
     }
 
     pub fn read_api_baseline(&self) -> Result<BTreeMap<(String, String), String>> {
@@ -337,6 +352,162 @@ impl Store {
                 serde_json::to_string(&snapshot.touched_cone)?,
                 snapshot.parent_session_id,
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_correlation_metadata(
+        &self,
+        owner_kind: &str,
+        owner_id: &str,
+        correlation: &FleetCorrelation,
+    ) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            r#"
+            INSERT INTO correlation_metadata (
+                owner_kind, owner_id, payload_json, updated_at_ms
+            ) VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(owner_kind, owner_id) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                owner_kind,
+                owner_id,
+                serde_json::to_string(correlation)?,
+                Utc::now().timestamp_millis(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn correlation_metadata(
+        &self,
+        owner_kind: &str,
+        owner_id: &str,
+    ) -> Result<Option<FleetCorrelation>> {
+        let conn = self.connect()?;
+        let payload = conn
+            .query_row(
+                "SELECT payload_json FROM correlation_metadata WHERE owner_kind = ?1 AND owner_id = ?2",
+                params![owner_kind, owner_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        payload
+            .map(|value| serde_json::from_str(&value).context("decode correlation metadata"))
+            .transpose()
+    }
+
+    #[cfg(test)]
+    pub fn upsert_index_job(&self, job: &IndexJobRecord) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            r#"
+            INSERT INTO index_jobs (
+                id, kind, strategy, status, cursor_json, lease_owner, lease_expires_at_ms,
+                processed_count, inserted_count, error_summary, created_at_ms, updated_at_ms,
+                started_at_ms, finished_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                strategy = excluded.strategy,
+                status = excluded.status,
+                cursor_json = excluded.cursor_json,
+                lease_owner = excluded.lease_owner,
+                lease_expires_at_ms = excluded.lease_expires_at_ms,
+                processed_count = excluded.processed_count,
+                inserted_count = excluded.inserted_count,
+                error_summary = excluded.error_summary,
+                updated_at_ms = excluded.updated_at_ms,
+                started_at_ms = excluded.started_at_ms,
+                finished_at_ms = excluded.finished_at_ms
+            "#,
+            params![
+                job.id,
+                job.kind,
+                job.strategy,
+                job.status,
+                job.cursor_json,
+                job.lease_owner,
+                job.lease_expires_at_ms,
+                job.processed_count,
+                job.inserted_count,
+                job.error_summary,
+                job.created_at_ms,
+                job.updated_at_ms,
+                job.started_at_ms,
+                job.finished_at_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn index_job(&self, id: &str) -> Result<Option<IndexJobRecord>> {
+        let conn = self.connect()?;
+        conn.query_row(
+            r#"
+            SELECT id, kind, strategy, status, cursor_json, lease_owner, lease_expires_at_ms,
+                   processed_count, inserted_count, error_summary, created_at_ms, updated_at_ms,
+                   started_at_ms, finished_at_ms
+            FROM index_jobs
+            WHERE id = ?1
+            "#,
+            params![id],
+            |row| {
+                Ok(IndexJobRecord {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    strategy: row.get(2)?,
+                    status: row.get(3)?,
+                    cursor_json: row.get(4)?,
+                    lease_owner: row.get(5)?,
+                    lease_expires_at_ms: row.get(6)?,
+                    processed_count: row.get(7)?,
+                    inserted_count: row.get(8)?,
+                    error_summary: row.get(9)?,
+                    created_at_ms: row.get(10)?,
+                    updated_at_ms: row.get(11)?,
+                    started_at_ms: row.get(12)?,
+                    finished_at_ms: row.get(13)?,
+                })
+            },
+        )
+        .optional()
+        .context("read index job")
+    }
+
+    pub fn try_acquire_maintenance_lease(
+        &self,
+        name: &str,
+        owner: &str,
+        lease_expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<bool> {
+        let conn = self.connect()?;
+        let changed = conn.execute(
+            r#"
+            INSERT INTO maintenance_leases (name, owner, lease_expires_at_ms, updated_at_ms)
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(name) DO UPDATE SET
+                owner = excluded.owner,
+                lease_expires_at_ms = excluded.lease_expires_at_ms,
+                updated_at_ms = excluded.updated_at_ms
+            WHERE maintenance_leases.lease_expires_at_ms <= ?4
+            "#,
+            params![name, owner, lease_expires_at_ms, now_ms],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn release_maintenance_lease(&self, name: &str, owner: &str) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "DELETE FROM maintenance_leases WHERE name = ?1 AND owner = ?2",
+            params![name, owner],
         )?;
         Ok(())
     }
@@ -553,6 +724,42 @@ impl Store {
                 parent_session_id TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS correlation_metadata (
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY(owner_kind, owner_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_correlation_owner ON correlation_metadata(owner_kind, owner_id);
+
+            CREATE TABLE IF NOT EXISTS index_jobs (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                status TEXT NOT NULL,
+                cursor_json TEXT NOT NULL,
+                lease_owner TEXT,
+                lease_expires_at_ms INTEGER,
+                processed_count INTEGER NOT NULL,
+                inserted_count INTEGER NOT NULL,
+                error_summary TEXT,
+                created_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                started_at_ms INTEGER,
+                finished_at_ms INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_index_jobs_status ON index_jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_index_jobs_lease ON index_jobs(lease_expires_at_ms);
+
+            CREATE TABLE IF NOT EXISTS maintenance_leases (
+                name TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                lease_expires_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_maintenance_leases_expires ON maintenance_leases(lease_expires_at_ms);
+
             CREATE TABLE IF NOT EXISTS findings_cache (
                 cache_key TEXT PRIMARY KEY,
                 payload_json TEXT NOT NULL,
@@ -581,7 +788,8 @@ fn bool_to_int(value: bool) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::Store;
-    use crate::model::FileDocument;
+    use crate::model::{FileDocument, IndexJobRecord};
+    use crate::protocol::FleetCorrelation;
     use rusqlite::{Connection, params};
     use std::{
         fs,
@@ -649,6 +857,101 @@ mod tests {
                 .expect("file digest")
                 .as_deref(),
             Some("digest-b")
+        );
+    }
+
+    #[test]
+    fn stores_correlation_metadata_outside_graph_identity_tables() {
+        let state_dir = temp_dir("correlation");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let store = Store::open(&state_dir).expect("open store");
+        let correlation = FleetCorrelation {
+            workspace_id: Some("workspace-a".into()),
+            plan_id: Some("plan-a".into()),
+            plan_slug: Some("plan-slug-a".into()),
+            wave_id: Some("W5".into()),
+            agent_run_id: Some("agent-run-a".into()),
+            correlation_id: Some("corr-a".into()),
+            tool_call_id: Some("tool-call-a".into()),
+            artifact_ref: Some("artifact-a".into()),
+            lifecycle_object_id: Some("lifecycle-a".into()),
+            concord_event_id: Some("concord-a".into()),
+            fleet_run_id: Some("fleet-a".into()),
+            spine_seq: Some(7),
+        };
+
+        store
+            .upsert_correlation_metadata("session", "session-a", &correlation)
+            .expect("persist correlation");
+
+        assert_eq!(
+            store
+                .correlation_metadata("session", "session-a")
+                .expect("read correlation"),
+            Some(correlation)
+        );
+        assert!(!table_has_column(&store.db_path, "files", "correlation_id"));
+        assert!(!table_has_column(&store.db_path, "imports", "correlation_id"));
+        assert!(!table_has_column(&store.db_path, "public_exports", "correlation_id"));
+        assert!(!table_has_column(&store.db_path, "clone_fingerprints", "correlation_id"));
+        assert!(!table_has_column(&store.db_path, "type_shapes", "correlation_id"));
+    }
+
+    #[test]
+    fn persists_index_job_progress_and_lease_metadata() {
+        let state_dir = temp_dir("index-job");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let store = Store::open(&state_dir).expect("open store");
+        let job = IndexJobRecord {
+            id: "job-a".into(),
+            kind: "bootstrap".into(),
+            strategy: "bounded".into(),
+            status: "running".into(),
+            cursor_json: "{\"next\":\"src/a.ts\"}".into(),
+            lease_owner: Some("daemon-a".into()),
+            lease_expires_at_ms: Some(2_000),
+            processed_count: 5,
+            inserted_count: 4,
+            error_summary: None,
+            created_at_ms: 1_000,
+            updated_at_ms: 1_500,
+            started_at_ms: Some(1_100),
+            finished_at_ms: None,
+        };
+
+        store.upsert_index_job(&job).expect("upsert index job");
+
+        assert_eq!(store.index_job("job-a").expect("read index job"), Some(job));
+    }
+
+    #[test]
+    fn maintenance_leases_exclude_active_writers_and_recover_stale_leases() {
+        let state_dir = temp_dir("maintenance-lease");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let store = Store::open(&state_dir).expect("open store");
+
+        assert!(
+            store
+                .try_acquire_maintenance_lease("rebuild", "owner-a", 2_000, 1_000)
+                .expect("acquire first lease")
+        );
+        assert!(
+            !store
+                .try_acquire_maintenance_lease("rebuild", "owner-b", 3_000, 1_500)
+                .expect("active lease blocks second owner")
+        );
+        assert!(
+            store
+                .try_acquire_maintenance_lease("rebuild", "owner-b", 4_000, 2_500)
+                .expect("stale lease is recoverable")
+        );
+        store
+            .release_maintenance_lease("rebuild", "owner-b")
+            .expect("release lease");
+        assert!(
+            store
+                .try_acquire_maintenance_lease("rebuild", "owner-c", 5_000, 3_000)
+                .expect("released lease can be reacquired")
         );
     }
 
@@ -763,6 +1066,21 @@ mod tests {
             params!["src/index.ts", "digest-a", 1_i64, 10_i64, 0_i64, Option::<String>::None, 2_i64],
         )
         .expect("insert seeded file");
+    }
+
+    fn table_has_column(db_path: &Path, table: &str, column: &str) -> bool {
+        let conn = Connection::open(db_path).expect("open sqlite");
+        let mut statement = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("prepare table info");
+        let mut rows = statement.query([]).expect("query table info");
+        while let Some(row) = rows.next().expect("read table info") {
+            let name: String = row.get(1).expect("column name");
+            if name == column {
+                return true;
+            }
+        }
+        false
     }
 
     fn sqlite_user_version(db_path: &Path) -> i64 {

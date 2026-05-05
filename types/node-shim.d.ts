@@ -29,6 +29,8 @@ declare class Buffer extends Uint8Array {
 }
 
 declare module "node:path" {
+  export function join(...parts: string[]): string;
+  export function dirname(p: string): string;
   const path: {
     join(...parts: string[]): string;
     resolve(...parts: string[]): string;
@@ -51,10 +53,16 @@ declare module "node:fs/promises" {
 }
 
 declare module "node:fs" {
+  export function appendFileSync(path: string, data: string): void;
+  export function existsSync(path: string): boolean;
+  export function mkdirSync(path: string, options?: { recursive?: boolean }): void;
   const fs: {
     readFileSync(path: string, encoding: string): string;
+    appendFileSync: typeof appendFileSync;
+    existsSync: typeof existsSync;
+    mkdirSync: typeof mkdirSync;
   };
-  export = fs;
+  export default fs;
 }
 
 declare module "node:crypto" {
@@ -67,6 +75,7 @@ declare module "node:crypto" {
 
 declare module "node:os" {
   export function tmpdir(): string;
+  export function homedir(): string;
 }
 
 declare module "node:url" {

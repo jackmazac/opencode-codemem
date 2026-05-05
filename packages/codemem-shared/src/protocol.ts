@@ -155,14 +155,38 @@ export type RpcErrorEnvelope = {
   details?: Record<string, unknown>;
 };
 
+export type CodeMemToolErrorCode =
+  | "E_CODEMEM_DAEMON_UNAVAILABLE"
+  | "E_CODEMEM_DAEMON_TIMEOUT"
+  | "E_CODEMEM_PROTOCOL_MISMATCH"
+  | "E_CODEMEM_PROJECT_MISMATCH"
+  | "E_CODEMEM_PAYLOAD_TOO_LARGE"
+  | "E_CODEMEM_INTERNAL";
+
+export type CodeMemToolErrorResponse = {
+  status: "degraded";
+  degraded: true;
+  error: {
+    code: CodeMemToolErrorCode;
+    message: string;
+    retryable: boolean;
+    details?: Record<string, unknown>;
+  };
+};
+
 export type FleetCorrelation = {
   workspace_id?: string;
   plan_id?: string;
+  plan_slug?: string;
   wave_id?: string;
   agent_run_id?: string;
   correlation_id?: string;
   tool_call_id?: string;
   artifact_ref?: string;
+  lifecycle_object_id?: string;
+  concord_event_id?: string;
+  fleet_run_id?: string;
+  spine_seq?: number;
 };
 
 export type HealthRequest = {
@@ -177,8 +201,12 @@ export type HealthResponse = {
   startedAtUnixMs: number;
   healthy: boolean;
   queueDepth: number;
+  droppedBatches?: number;
+  failedBatches?: number;
   indexedFiles: number;
   findingsCacheEntries: number;
+  warnings?: string[];
+  checks?: Array<{ name: string; status: "ok" | "warn" | "fail"; message: string }>;
 };
 
 export type FilesChangedNotification = FleetCorrelation & {

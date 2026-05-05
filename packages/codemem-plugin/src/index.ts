@@ -8,6 +8,7 @@ import {
 } from "@codemem/shared/protocol";
 import { loadCodeMemConfig, resolveStateDirectory, type LoadedCodeMemConfig } from "@codemem/shared/config";
 import type { Plugin } from "@opencode-ai/plugin";
+import { wrapPlugin } from "@jackmazac/opencode-host-adapter";
 import { createCodeMemTools, type CodeMemToolRuntime } from "./tools";
 import { DaemonSupervisor } from "./daemon/supervisor";
 import type { DaemonClient } from "./daemon/client";
@@ -15,9 +16,18 @@ import type { DaemonClient } from "./daemon/client";
 const WRITE_LIKE_TOOL = /(write|edit|patch|replace|create|delete|rename|move|file)/i;
 const CODE_FILE = /\.(?:[cm]?tsx?|jsx?)$/i;
 
+type PromptClient = {
+  session?: {
+    prompt?: (input: {
+      path: { id: string };
+      body: { noReply: boolean; parts: Array<{ type: "text"; text: string }> };
+    }) => Promise<unknown>;
+  };
+};
+
 class PluginRuntime implements CodeMemToolRuntime {
   readonly projectRoot: string;
-  private readonly client: any;
+  private readonly client: PromptClient;
   private loadedConfig: Promise<LoadedCodeMemConfig> | null = null;
   private supervisorPromise: Promise<DaemonSupervisor> | null = null;
   private readonly pendingFiles = new Map<string, Set<string>>();
@@ -26,9 +36,9 @@ class PluginRuntime implements CodeMemToolRuntime {
   private readonly injectedAt = new Map<string, number>();
   private readonly turnCounter = new Map<string, number>();
 
-  constructor(projectRoot: string, client: any) {
+  constructor(projectRoot: string, client: unknown) {
     this.projectRoot = projectRoot;
-    this.client = client;
+    this.client = normalizePromptClient(client);
   }
 
   getConfig(): Promise<LoadedCodeMemConfig> {
@@ -74,13 +84,17 @@ class PluginRuntime implements CodeMemToolRuntime {
     this.injectedAt.set(sessionID, now);
 
     try {
-      await this.client.session.prompt({
+      const prompt = this.client.session?.prompt;
+      if (!prompt) {
+        return;
+      }
+      await prompt({
         path: { id: sessionID },
         body: {
           noReply: true,
           parts: [{ type: "text", text: payload }],
         },
-      } as any);
+      });
     } catch {
       // prompt injection is best-effort only
     }
@@ -104,7 +118,7 @@ class PluginRuntime implements CodeMemToolRuntime {
     this.pendingReason.set(sessionID, reason);
     const previous = this.pendingTimer.get(sessionID);
     if (previous) {
-      clearTimeout(previous as any);
+      clearTimeout(previous);
     }
     const timer = setTimeout(() => {
       void this.flushChangedFiles(sessionID);
@@ -190,20 +204,20 @@ const plugin: Plugin = async (input) => {
       const changedFiles = extractChangedFiles(hook.tool, hook.args, runtime.projectRoot);
       if (changedFiles.length > 0) {
         await runtime.queueChangedFiles(hook.sessionID, changedFiles, "tool");
-      }
 
-      const warning = await runtime.currentWarning();
-      if (warning && changedFiles.length > 0) {
-        output.metadata = {
-          ...(output.metadata ?? {}),
-          codememWarning: warning,
-        };
+        const warning = await runtime.currentWarning();
+        if (warning) {
+          output.metadata = {
+            ...(output.metadata ?? {}),
+            codememWarning: warning,
+          };
+        }
       }
     },
   };
 };
 
-export default plugin;
+export default wrapPlugin(plugin, { name: "codemem" });
 
 function extractChangedFiles(toolName: string, args: unknown, projectRoot: string): string[] {
   if (!WRITE_LIKE_TOOL.test(toolName)) {
@@ -244,9 +258,9 @@ function collectPathCandidates(value: unknown, projectRoot: string, depth = 0, k
     return value.flatMap((item) => collectPathCandidates(item, projectRoot, depth + 1, keyHint));
   }
 
-  if (value && typeof value === "object") {
+  if (isRecord(value)) {
     const result: string[] = [];
-    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, nested] of Object.entries(value)) {
       result.push(...collectPathCandidates(nested, projectRoot, depth + 1, key));
     }
     return result;
@@ -269,4 +283,26 @@ function normalizeProjectRelative(projectRoot: string, candidate: string): strin
 
 function isEligibleCodePath(candidate: string): boolean {
   return Boolean(candidate) && !candidate.startsWith("..") && CODE_FILE.test(candidate);
+}
+
+function normalizePromptClient(client: unknown): PromptClient {
+  if (!isRecord(client)) {
+    return {};
+  }
+  if (!isRecord(client.session)) {
+    return {};
+  }
+  const prompt = client.session.prompt;
+  if (typeof prompt !== "function") {
+    return {};
+  }
+  return {
+    session: {
+      prompt: async (input) => prompt(input),
+    },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

@@ -120,17 +120,18 @@ export class DaemonClient {
     }
 
     if (isRpcErrorResponse(response)) {
-      const error = new Error(`codemem ${response.error.code}: ${response.error.message}`) as Error & {
-        retryable?: boolean;
-        details?: Record<string, unknown>;
-      };
-      error.retryable = response.error.retryable;
-      error.details = response.error.details;
-      throw error;
+      throw Object.assign(new Error(`codemem ${response.error.code}: ${response.error.message}`), {
+        retryable: response.error.retryable,
+        details: response.error.details,
+      });
     }
 
     if (!response.result) {
       throw new Error(`codemem daemon returned no result for ${method}`);
+    }
+
+    if (method === "health") {
+      return validateHealthResult(response.result) as RpcMethodMap[M]["result"];
     }
 
     return response.result as RpcMethodMap[M]["result"];
@@ -224,4 +225,53 @@ async function readResponse(
 
 function createTimeout(timeoutMs: number, onTimeout: () => void): NodeJS.Timeout {
   return setTimeout(onTimeout, Math.max(1, timeoutMs));
+}
+
+function validateHealthResult(value: unknown): HealthResponse {
+  const result = requireRecord(value, "invalid health result");
+  return {
+    protocolVersion: requireNumber(result.protocolVersion, "invalid health result: protocolVersion"),
+    schemaVersion: requireNumber(result.schemaVersion, "invalid health result: schemaVersion"),
+    daemonVersion: requireString(result.daemonVersion, "invalid health result: daemonVersion"),
+    projectRoot: requireString(result.projectRoot, "invalid health result: projectRoot"),
+    startedAtUnixMs: requireNumber(result.startedAtUnixMs, "invalid health result: startedAtUnixMs"),
+    healthy: requireBoolean(result.healthy, "invalid health result: healthy"),
+    queueDepth: requireNumber(result.queueDepth, "invalid health result: queueDepth"),
+    droppedBatches: optionalNumber(result.droppedBatches, "invalid health result: droppedBatches"),
+    failedBatches: optionalNumber(result.failedBatches, "invalid health result: failedBatches"),
+    indexedFiles: requireNumber(result.indexedFiles, "invalid health result: indexedFiles"),
+    findingsCacheEntries: requireNumber(
+      result.findingsCacheEntries,
+      "invalid health result: findingsCacheEntries",
+    ),
+  };
+}
+
+function requireRecord(value: unknown, message: string): Record<string, unknown> {
+  assertRecord(value, message);
+  return value;
+}
+
+function assertRecord(value: unknown, message: string): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(message);
+}
+
+function requireString(value: unknown, message: string): string {
+  if (typeof value !== "string") throw new Error(message);
+  return value;
+}
+
+function requireNumber(value: unknown, message: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(message);
+  return value;
+}
+
+function optionalNumber(value: unknown, message: string): number | undefined {
+  if (value === undefined) return undefined;
+  return requireNumber(value, message);
+}
+
+function requireBoolean(value: unknown, message: string): boolean {
+  if (typeof value !== "boolean") throw new Error(message);
+  return value;
 }

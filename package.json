@@ -21,7 +21,7 @@
     "smoke:packaged": "bun ./scripts/smoke-packaged.ts --json",
     "smoke:runtime": "bun ./scripts/runtime-smoke.ts",
     "package:local": "bun ./scripts/package-local.mjs",
-    "verify": "bun run lint:no-zod && bun run typecheck && bun run test && bun run build && bun run package:local",
+    "verify": "bun run lint:no-zod && bun run typecheck && bun run test && bun run build && bun run package:local && bun run smoke:runtime && bun run smoke:packaged && bun run bench:threshold -- --quick",
     "clean": "node ./scripts/clean.mjs"
   },
   "devDependencies": {

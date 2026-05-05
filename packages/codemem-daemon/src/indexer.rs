@@ -6,6 +6,7 @@ use crate::{
         DriftMap, Evidence, FileDocument, Finding, ImportEdge, PublicApiSymbol, Severity,
         StoreStats,
     },
+    protocol::FleetCorrelation,
     session_conflicts::SessionConflictTracker,
     store::Store,
 };
@@ -27,7 +28,7 @@ use std::{
     },
     time::Instant,
 };
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TrySendError};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -156,6 +157,7 @@ struct IndexWorkItem {
     session_id: String,
     files: Vec<String>,
     reason: String,
+    correlation: FleetCorrelation,
 }
 
 pub struct Indexer {
@@ -167,6 +169,8 @@ pub struct Indexer {
     clone_detector: CloneDetector,
     type_shape_detector: TypeShapeDetector,
     queue_depth: AtomicUsize,
+    dropped_batches: AtomicUsize,
+    failed_batches: AtomicUsize,
     indexed_at_ms: AtomicI64,
     worker_rx: Mutex<Option<mpsc::Receiver<IndexWorkItem>>>,
     worker_tx: mpsc::Sender<IndexWorkItem>,
@@ -191,6 +195,8 @@ impl Indexer {
             clone_detector: CloneDetector::new(&config),
             type_shape_detector: TypeShapeDetector::new(&config),
             queue_depth: AtomicUsize::new(0),
+            dropped_batches: AtomicUsize::new(0),
+            failed_batches: AtomicUsize::new(0),
             indexed_at_ms: AtomicI64::new(0),
             worker_rx: Mutex::new(Some(worker_rx)),
             worker_tx,
@@ -202,22 +208,35 @@ impl Indexer {
             let this = Arc::clone(self);
             tokio::spawn(async move {
                 while let Some(item) = rx.recv().await {
-                    let _ = this
+                    let _ = this.store.upsert_correlation_metadata(
+                        "index_batch",
+                        &format!("{}:{}", item.session_id, item.reason),
+                        &item.correlation,
+                    );
+                    let result = this
                         .index_paths_now(&item.session_id, item.files.clone(), &item.reason)
                         .await;
+                    if result.is_err() {
+                        this.failed_batches.fetch_add(1, Ordering::SeqCst);
+                    }
                     this.queue_depth.fetch_sub(1, Ordering::SeqCst);
                 }
             });
         }
 
-        let this = Arc::clone(self);
-        tokio::spawn(async move {
-            let _ = this.bootstrap_scan().await;
-        });
+        // Broad bootstrap indexing is explicit job/CLI work, never daemon startup work.
     }
 
     pub fn queue_depth(&self) -> usize {
         self.queue_depth.load(Ordering::SeqCst)
+    }
+
+    pub fn dropped_batches(&self) -> usize {
+        self.dropped_batches.load(Ordering::SeqCst)
+    }
+
+    pub fn failed_batches(&self) -> usize {
+        self.failed_batches.load(Ordering::SeqCst)
     }
 
     pub fn indexed_at_ms(&self) -> i64 {
@@ -228,28 +247,44 @@ impl Indexer {
         self.store.stats()
     }
 
+    pub fn record_correlation_metadata(
+        &self,
+        owner_kind: &str,
+        owner_id: &str,
+        correlation: &FleetCorrelation,
+    ) -> Result<()> {
+        self.store
+            .upsert_correlation_metadata(owner_kind, owner_id, correlation)
+    }
+
     pub async fn enqueue_files(
         &self,
         session_id: String,
         files: Vec<String>,
         reason: String,
+        correlation: FleetCorrelation,
     ) -> Result<()> {
         let files = self.normalize_candidates(files);
         if files.is_empty() {
             return Ok(());
         }
-        self.queue_depth.fetch_add(1, Ordering::SeqCst);
-        if let Err(error) = self
-            .worker_tx
-            .send(IndexWorkItem {
+        self.store
+            .upsert_correlation_metadata("session", &session_id, &correlation)?;
+        match self.worker_tx.try_send(IndexWorkItem {
                 session_id,
                 files,
                 reason,
-            })
-            .await
-        {
-            self.queue_depth.fetch_sub(1, Ordering::SeqCst);
-            return Err(anyhow::anyhow!(error.to_string()));
+                correlation,
+            }) {
+            Ok(()) => {
+                self.queue_depth.fetch_add(1, Ordering::SeqCst);
+            }
+            Err(TrySendError::Full(_)) => {
+                self.dropped_batches.fetch_add(1, Ordering::SeqCst);
+            }
+            Err(TrySendError::Closed(_)) => {
+                return Err(anyhow::anyhow!("index queue is closed"));
+            }
         }
         Ok(())
     }
@@ -578,10 +613,10 @@ impl Indexer {
     }
 
     pub fn api_surface(&self, max_exports: usize) -> Result<ApiSurfaceSummary> {
-        let mut exports = self.store.load_public_exports()?;
-        let total = exports.len();
-        let truncated = exports.len() > max_exports;
-        exports.truncate(max_exports);
+        let limit = max_exports.max(1);
+        let total = self.store.count_public_exports()?;
+        let exports = self.store.load_public_exports_limited(limit)?;
+        let truncated = total > exports.len();
         Ok(ApiSurfaceSummary {
             exports,
             total,
@@ -668,6 +703,10 @@ impl Indexer {
                 applied: false,
             });
         }
+        let lease_owner = maintenance_owner("maintain");
+        if prune_logs || compact {
+            self.acquire_maintenance_lease("maintain", &lease_owner)?;
+        }
         if prune_logs {
             for detail in self.store.prune(self.config.telemetry.retain_days)? {
                 actions.push(MaintainAction {
@@ -679,6 +718,10 @@ impl Indexer {
         }
         if compact {
             self.store.vacuum()?;
+        }
+        if prune_logs || compact {
+            self.store
+                .release_maintenance_lease("maintain", &lease_owner)?;
         }
         Ok(MaintainSummary {
             actions,
@@ -699,13 +742,28 @@ impl Indexer {
                 reason,
             });
         }
+        let lease_owner = maintenance_owner("rebuild");
+        self.acquire_maintenance_lease("rebuild", &lease_owner)?;
         self.store.clear_index()?;
         self.indexed_at_ms.store(0, Ordering::SeqCst);
         self.bootstrap_scan().await?;
+        self.store
+            .release_maintenance_lease("rebuild", &lease_owner)?;
         Ok(RebuildSummary {
             would_rebuild: true,
             reason,
         })
+    }
+
+    fn acquire_maintenance_lease(&self, name: &str, owner: &str) -> Result<()> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let acquired = self
+            .store
+            .try_acquire_maintenance_lease(name, owner, now + 5 * 60 * 1_000, now)?;
+        if !acquired {
+            bail!("maintenance lease is already active: {name}");
+        }
+        Ok(())
     }
 
     async fn index_paths_now(
@@ -1126,6 +1184,10 @@ fn syntax_probe(path: &Path, source: &str) -> Option<String> {
     }
 }
 
+fn maintenance_owner(kind: &str) -> String {
+    format!("codemem-{kind}-{}", std::process::id())
+}
+
 fn extract_imports(project_root: &Path, from_path: &str, source: &str) -> Vec<ImportEdge> {
     let import_re =
         Regex::new(r#"(?m)^\s*import\s+(type\s+)?(?:[^\n'"]+?\s+from\s+)?['\"]([^'\"]+)['\"]"#)
@@ -1411,6 +1473,7 @@ mod tests {
     use crate::{
         config::{Layers, PackageBoundary, ProjectConfig},
         model::{CloneFingerprint, FileDocument, ImportEdge, PublicApiSymbol, TypeShapeRecord},
+        protocol::FleetCorrelation,
         session_conflicts::SessionConflictTracker,
         store::Store,
     };
@@ -1418,7 +1481,7 @@ mod tests {
         fs,
         path::PathBuf,
         sync::Arc,
-        time::{Instant, SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     #[test]
@@ -1462,6 +1525,73 @@ mod tests {
             findings.is_empty(),
             "disabled layers produced findings: {findings:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn start_does_not_run_uncapped_bootstrap_scan() {
+        let project_root = temp_dir("startup-project");
+        let state_dir = temp_dir("startup-state");
+        fs::create_dir_all(project_root.join("src")).expect("create fixture src");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        fs::write(project_root.join("src/index.ts"), "export const value = 1;\n")
+            .expect("write source");
+        let store = Arc::new(Store::open(&state_dir).expect("open store"));
+        let config = Arc::new(ProjectConfig::default());
+        let sessions = Arc::new(SessionConflictTracker::new(
+            config.thresholds.session_conflict_decay_ms,
+            Arc::clone(&store),
+        ));
+        let indexer = Indexer::new(
+            project_root,
+            state_dir,
+            Arc::clone(&config),
+            Arc::clone(&store),
+            sessions,
+        )
+        .expect("create indexer");
+
+        indexer.start();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        assert_eq!(store.stats().expect("store stats").indexed_files, 0);
+    }
+
+    #[tokio::test]
+    async fn enqueue_files_does_not_block_when_queue_is_full() {
+        let project_root = temp_dir("queue-project");
+        let state_dir = temp_dir("queue-state");
+        fs::create_dir_all(project_root.join("src")).expect("create fixture src");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let store = Arc::new(Store::open(&state_dir).expect("open store"));
+        let config = Arc::new(ProjectConfig::default());
+        let sessions = Arc::new(SessionConflictTracker::new(
+            config.thresholds.session_conflict_decay_ms,
+            Arc::clone(&store),
+        ));
+        let indexer = Indexer::new(
+            project_root,
+            state_dir,
+            Arc::clone(&config),
+            Arc::clone(&store),
+            sessions,
+        )
+        .expect("create indexer");
+
+        for index in 0..300 {
+            let result = tokio::time::timeout(
+                Duration::from_millis(100),
+                indexer.enqueue_files(
+                    format!("session-{index}"),
+                    vec![format!("src/file-{index}.ts")],
+                    "event".into(),
+                    FleetCorrelation::default(),
+                ),
+            )
+            .await;
+
+            assert!(result.is_ok(), "enqueue blocked at item {index}");
+        }
+        assert!(indexer.dropped_batches() > 0);
     }
 
     #[test]
@@ -1596,6 +1726,45 @@ mod tests {
         assert_eq!(absolute_impact.files, impact.files);
         assert_eq!(layers.cycles.len(), 1);
         assert_eq!(first_layer_cycle.cycles.len(), 1);
+    }
+
+    #[test]
+    fn api_surface_enforces_store_level_limit() {
+        let project_root = temp_dir("api-limit-project");
+        let state_dir = temp_dir("api-limit-state");
+        fs::create_dir_all(&project_root).expect("create project root");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        let store = Arc::new(Store::open(&state_dir).expect("open store"));
+        for index in 0..3 {
+            store
+                .upsert_file_document(&fixture_document(
+                    &format!("src/{index}.ts"),
+                    "src/other.ts",
+                    &format!("export{index}"),
+                    "value:number",
+                    &format!("Shape{index}"),
+                ))
+                .expect("upsert fixture document");
+        }
+        let config = Arc::new(ProjectConfig::default());
+        let sessions = Arc::new(SessionConflictTracker::new(
+            config.thresholds.session_conflict_decay_ms,
+            Arc::clone(&store),
+        ));
+        let indexer = Indexer::new(
+            project_root,
+            state_dir,
+            Arc::clone(&config),
+            Arc::clone(&store),
+            sessions,
+        )
+        .expect("create indexer");
+
+        let surface = indexer.api_surface(2).expect("api surface");
+
+        assert_eq!(surface.exports.len(), 2);
+        assert_eq!(surface.total, 3);
+        assert!(surface.truncated);
     }
 
     #[tokio::test]

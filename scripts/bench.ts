@@ -72,13 +72,57 @@ try {
 function runQuickBenches(projectRoot: string): BenchResult[] {
   return [
     runBench(
+      "health",
+      ["bun", cli, "doctor", "--project-root", projectRoot, "--json"],
+      projectRoot,
+    ),
+    runBench(
       "status",
       ["bun", cli, "status", "--project-root", projectRoot, "--json"],
       projectRoot,
     ),
     runBench(
       "check",
-      ["bun", cli, "check", "--project-root", projectRoot, "--max-findings", "50", "--json"],
+      [
+        "bun",
+        cli,
+        "check",
+        "--project-root",
+        projectRoot,
+        "--path",
+        "packages/codemem-shared/src/protocol.ts",
+        "--max-findings",
+        "50",
+        "--json",
+      ],
+      projectRoot,
+    ),
+    runBench(
+      "drift_map",
+      ["bun", cli, "drift-map", "--project-root", projectRoot, "--max-findings", "50", "--json"],
+      projectRoot,
+    ),
+    runBench(
+      "conflicts",
+      ["bun", cli, "conflicts", "--project-root", projectRoot, "--json"],
+      projectRoot,
+    ),
+    runBench(
+      "change_risk",
+      [
+        "bun",
+        cli,
+        "change-risk",
+        "--project-root",
+        projectRoot,
+        "--path",
+        "packages/codemem-shared/src/protocol.ts",
+        "--depth",
+        "2",
+        "--max-findings",
+        "50",
+        "--json",
+      ],
       projectRoot,
     ),
     runBench(
@@ -112,6 +156,42 @@ function runQuickBenches(projectRoot: string): BenchResult[] {
         projectRoot,
         "--max-findings",
         "50",
+        "--json",
+      ],
+      projectRoot,
+    ),
+    runBench(
+      "review_focus",
+      [
+        "bun",
+        cli,
+        "review-focus",
+        "--project-root",
+        projectRoot,
+        "--path",
+        "packages/codemem-shared/src/protocol.ts",
+        "--max-findings",
+        "50",
+        "--max-items",
+        "10",
+        "--json",
+      ],
+      projectRoot,
+    ),
+    runBench(
+      "artifact",
+      [
+        "bun",
+        cli,
+        "artifact",
+        "--project-root",
+        projectRoot,
+        "--kind",
+        "audit",
+        "--slug",
+        "codemem-bench",
+        "--max-findings",
+        "10",
         "--json",
       ],
       projectRoot,
@@ -212,7 +292,7 @@ async function runFullBenches(projectRoot: string): Promise<BenchResult[]> {
   return results;
 }
 
-function runBench(name: string, command: string[], projectRoot: string): BenchResult {
+function runBench(name: string, command: string[], _projectRoot: string): BenchResult {
   const started = performance.now();
   const result = Bun.spawnSync(command, {
     cwd: repoRoot,

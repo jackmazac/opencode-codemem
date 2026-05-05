@@ -411,6 +411,7 @@ async fn dispatch_inner(
                     params.session_id.clone(),
                     params.files.clone(),
                     params.reason.clone(),
+                    params.correlation.clone(),
                 )
                 .await
                 .map_err(|error| {
@@ -430,6 +431,7 @@ async fn dispatch_inner(
                 envelope.id.clone(),
                 ctx.protocol_version,
             )?;
+            record_rpc_correlation(&ctx, "analysis.check", &params.correlation)?;
             let summary = ctx
                 .indexer
                 .check(
@@ -456,6 +458,7 @@ async fn dispatch_inner(
                 envelope.id.clone(),
                 ctx.protocol_version,
             )?;
+            record_rpc_correlation(&ctx, "analysis.driftMap", &params.correlation)?;
             let summary = ctx
                 .indexer
                 .drift_map(
@@ -480,6 +483,7 @@ async fn dispatch_inner(
                 envelope.id.clone(),
                 ctx.protocol_version,
             )?;
+            record_rpc_correlation(&ctx, "analysis.conflicts", &params.correlation)?;
             let summary = ctx
                 .indexer
                 .conflicts(params.session_id.as_deref(), ctx.config.max_findings)
@@ -501,6 +505,7 @@ async fn dispatch_inner(
                 envelope.id.clone(),
                 ctx.protocol_version,
             )?;
+            record_rpc_correlation(&ctx, "analysis.impactCone", &params.correlation)?;
             let summary = ctx
                 .indexer
                 .impact_cone(&params.path, params.depth)
@@ -521,6 +526,7 @@ async fn dispatch_inner(
                 envelope.id.clone(),
                 ctx.protocol_version,
             )?;
+            record_rpc_correlation(&ctx, "analysis.changeRisk", &params.correlation)?;
             let summary = ctx
                 .indexer
                 .change_risk(
@@ -546,6 +552,7 @@ async fn dispatch_inner(
                 envelope.id.clone(),
                 ctx.protocol_version,
             )?;
+            record_rpc_correlation(&ctx, "analysis.apiSurface", &params.correlation)?;
             let summary = ctx
                 .indexer
                 .api_surface(params.max_exports)
@@ -566,6 +573,7 @@ async fn dispatch_inner(
                 envelope.id.clone(),
                 ctx.protocol_version,
             )?;
+            record_rpc_correlation(&ctx, "analysis.layerBoundaries", &params.correlation)?;
             let summary = ctx
                 .indexer
                 .layer_boundaries(normalize_max_findings(params.max_findings, &ctx.config))
@@ -713,6 +721,21 @@ fn normalize_max_findings(value: usize, config: &ProjectConfig) -> usize {
     requested.min(config.max_findings.max(1)).max(1)
 }
 
+fn record_rpc_correlation(
+    ctx: &RpcContext,
+    method: &str,
+    correlation: &FleetCorrelation,
+) -> std::result::Result<(), ResponseEnvelope> {
+    let owner_id = correlation
+        .tool_call_id
+        .as_deref()
+        .or(correlation.correlation_id.as_deref())
+        .unwrap_or(method);
+    ctx.indexer
+        .record_correlation_metadata("rpc", owner_id, correlation)
+        .map_err(|error| response_from_error(None, ctx.protocol_version, error))
+}
+
 fn response_from_error(
     id: Option<String>,
     protocol_version: u32,
@@ -751,16 +774,76 @@ fn response_error(
 }
 
 fn json_health(ctx: &RpcContext, stats: &StoreStats) -> Value {
+    let queue_depth = ctx.indexer.queue_depth();
+    let dropped_batches = ctx.indexer.dropped_batches();
+    let failed_batches = ctx.indexer.failed_batches();
+    let queue_status = if queue_depth >= 256 { "fail" } else if queue_depth > 0 { "warn" } else { "ok" };
+    let drops_status = if dropped_batches > 0 { "warn" } else { "ok" };
+    let failures_status = if failed_batches > 0 { "warn" } else { "ok" };
+    let index_status = if stats.indexed_files > 0 { "ok" } else { "warn" };
+    let checks = vec![
+        json!({
+            "name": "protocol_version",
+            "status": "ok",
+            "message": format!("protocol {}", ctx.protocol_version),
+        }),
+        json!({
+            "name": "schema_version",
+            "status": "ok",
+            "message": format!("schema {}", SCHEMA_VERSION),
+        }),
+        json!({
+            "name": "queue_depth",
+            "status": queue_status,
+            "message": format!("{} pending index batches", queue_depth),
+        }),
+        json!({
+            "name": "queue_drops",
+            "status": drops_status,
+            "message": format!("{} dropped index batches", dropped_batches),
+        }),
+        json!({
+            "name": "index_failures",
+            "status": failures_status,
+            "message": format!("{} failed index batches", failed_batches),
+        }),
+        json!({
+            "name": "index_state",
+            "status": index_status,
+            "message": format!("{} files indexed", stats.indexed_files),
+        }),
+    ];
+    let warnings = checks
+        .iter()
+        .filter_map(|check| {
+            if check.get("status").and_then(Value::as_str) == Some("warn") {
+                check.get("message").and_then(Value::as_str).map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let healthy = checks.iter().all(|check| {
+        check
+            .get("status")
+            .and_then(Value::as_str)
+            .map(|status| status != "fail")
+            .unwrap_or(false)
+    });
     json!({
         "protocolVersion": ctx.protocol_version,
         "schemaVersion": SCHEMA_VERSION,
         "daemonVersion": DAEMON_VERSION,
         "projectRoot": ctx.project_root,
         "startedAtUnixMs": ctx.started_at_unix_ms,
-        "healthy": true,
-        "queueDepth": ctx.indexer.queue_depth(),
+        "healthy": healthy,
+        "queueDepth": queue_depth,
+        "droppedBatches": dropped_batches,
+        "failedBatches": failed_batches,
         "indexedFiles": stats.indexed_files,
         "findingsCacheEntries": stats.findings_cache_entries,
+        "warnings": warnings,
+        "checks": checks,
     })
 }
 
@@ -1162,11 +1245,16 @@ mod tests {
         let base_correlation = json!({
             "workspace_id": "workspace-a",
             "plan_id": "plan-a",
+            "plan_slug": "plan-slug-a",
             "wave_id": "W5",
             "agent_run_id": "agent-run-a",
             "correlation_id": "corr-a",
             "tool_call_id": "tool-call-a",
-            "artifact_ref": "artifact-a"
+            "artifact_ref": "artifact-a",
+            "lifecycle_object_id": "lifecycle-a",
+            "concord_event_id": "concord-a",
+            "fleet_run_id": "fleet-a",
+            "spine_seq": 7
         });
 
         let check = deserialize_params::<CheckParams>(
@@ -1247,11 +1335,16 @@ mod tests {
     fn assert_fleet_correlation(value: serde_json::Value) {
         assert_eq!(value["workspace_id"], "workspace-a");
         assert_eq!(value["plan_id"], "plan-a");
+        assert_eq!(value["plan_slug"], "plan-slug-a");
         assert_eq!(value["wave_id"], "W5");
         assert_eq!(value["agent_run_id"], "agent-run-a");
         assert_eq!(value["correlation_id"], "corr-a");
         assert_eq!(value["tool_call_id"], "tool-call-a");
         assert_eq!(value["artifact_ref"], "artifact-a");
+        assert_eq!(value["lifecycle_object_id"], "lifecycle-a");
+        assert_eq!(value["concord_event_id"], "concord-a");
+        assert_eq!(value["fleet_run_id"], "fleet-a");
+        assert_eq!(value["spine_seq"], 7);
     }
 
     fn merge_json(mut left: serde_json::Value, right: serde_json::Value) -> serde_json::Value {

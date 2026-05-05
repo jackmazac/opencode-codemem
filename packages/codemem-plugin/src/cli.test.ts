@@ -3,6 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
+import { validateHealthReport } from "@jackmazac/opencode-fleet-contracts";
 import {
   CODEMEM_PROTOCOL_VERSION,
   decodeFrames,
@@ -378,7 +379,7 @@ describe("runCodeMemCli", () => {
     });
   });
 
-  test("prints doctor as json with pass status", async () => {
+  test("prints doctor as canonical ok health report", async () => {
     const stdout: string[] = [];
     const runtime: CliRuntime = {
       async status() {
@@ -421,8 +422,64 @@ describe("runCodeMemCli", () => {
       stdout: (line) => stdout.push(line),
     });
 
+    const parsed: unknown = JSON.parse(stdout.join("\n"));
+    const validation = validateHealthReport(parsed);
+
     expect(exitCode).toBe(0);
-    expect(JSON.parse(stdout.join("\n")).status).toBe("pass");
+    expect(validation.ok).toBe(true);
+    if (!validation.ok) throw new Error(validation.errors.join("; "));
+    expect(validation.value.status).toBe("ok");
+  });
+
+  test("prints doctor as canonical failing health report when daemon health is unhealthy", async () => {
+    const stdout: string[] = [];
+    const runtime: CliRuntime = {
+      async status() {
+        return {
+          health: {
+            protocolVersion: 1,
+            schemaVersion: 1,
+            daemonVersion: "0.1.0",
+            projectRoot: "/repo",
+            startedAtUnixMs: 1,
+            healthy: false,
+            queueDepth: 0,
+            indexedFiles: 2,
+            findingsCacheEntries: 0,
+          },
+          stateDirectory: "/repo/.git/codemem",
+          protocolVersion: 1,
+        };
+      },
+      async check() {
+        throw new Error("check should not run");
+      },
+      async driftMap() {
+        throw new Error("drift-map should not run");
+      },
+      async conflicts() {
+        throw new Error("conflicts should not run");
+      },
+      async maintain() {
+        throw new Error("maintain should not run");
+      },
+      async rebuild() {
+        throw new Error("rebuild should not run");
+      },
+    };
+
+    const exitCode = await runCodeMemCli(["doctor", "--json", "--project-root", "/repo"], {
+      cwd: "/repo",
+      runtime,
+      stdout: (line) => stdout.push(line),
+    });
+    const parsed: unknown = JSON.parse(stdout.join("\n"));
+    const validation = validateHealthReport(parsed);
+
+    expect(exitCode).toBe(0);
+    expect(validation.ok).toBe(true);
+    if (!validation.ok) throw new Error(validation.errors.join("; "));
+    expect(validation.value.status).toBe("fail");
   });
 
   test("prints maintain dry-run result as json", async () => {

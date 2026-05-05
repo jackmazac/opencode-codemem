@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createRpcNotification, createRpcRequest, decodeFrames, encodeFrame } from "./protocol";
+import {
+  createRpcNotification,
+  createRpcRequest,
+  decodeFrames,
+  encodeFrame,
+  type FleetCorrelation,
+} from "./protocol";
 
 describe("codemem RPC protocol", () => {
   test("round trips OpenCode session and turn ID casing", () => {
@@ -41,14 +47,19 @@ describe("codemem RPC protocol", () => {
   });
 
   test("round trips fleet correlation on advisory analysis requests", () => {
-    const correlation = {
+    const correlation: FleetCorrelation = {
       workspace_id: "workspace-a",
       plan_id: "plan-a",
+      plan_slug: "plan-slug-a",
       wave_id: "W5",
       agent_run_id: "agent-run-a",
       correlation_id: "corr-a",
       tool_call_id: "tool-call-a",
       artifact_ref: "artifact-a",
+      lifecycle_object_id: "lifecycle-a",
+      concord_event_id: "concord-a",
+      fleet_run_id: "fleet-a",
+      spine_seq: 7,
     };
 
     const requests = [

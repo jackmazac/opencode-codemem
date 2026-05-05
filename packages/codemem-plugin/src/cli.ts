@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import fs from "node:fs/promises";
 import path from "node:path";
+import { makeHealthReport, type HealthCheck, type HealthReport } from "@jackmazac/opencode-fleet-contracts";
 import {
   createCodememAuditArtifact,
   createCodememJournalEntry,
@@ -621,9 +622,8 @@ async function executeAndFormat(command: CliCommand, runtime: CliRuntime): Promi
     }
     case "doctor": {
       const result = await runtime.status(command.projectRoot);
-      return command.json
-        ? JSON.stringify({ status: "pass", ...result }, null, 2)
-        : formatDoctor(result);
+      const report = createDoctorHealthReport(result);
+      return command.json ? JSON.stringify(report, null, 2) : formatDoctor(report);
     }
     case "check": {
       const result = await runtime.check(command);
@@ -772,8 +772,64 @@ function formatStatus(status: StatusResponse): string {
   ].join("\n");
 }
 
-function formatDoctor(status: StatusResponse): string {
-  return [`status: pass`, ...formatStatus(status).split("\n")].join("\n");
+function formatDoctor(report: HealthReport): string {
+  return [
+    `status: ${report.status}`,
+    ...report.checks.map((check) => {
+      const detail = check.message ? ` - ${check.message}` : "";
+      return `${check.status}: ${check.name}${detail}`;
+    }),
+  ].join("\n");
+}
+
+function createDoctorHealthReport(status: StatusResponse): HealthReport {
+  const startedAt = new Date().toISOString();
+  const checks: HealthCheck[] = [
+    {
+      name: "daemon",
+      status: status.health.healthy ? "ok" : "fail",
+      message: status.health.healthy ? "codemem daemon is healthy" : "codemem daemon reported unhealthy",
+      detail: {
+        daemonVersion: status.health.daemonVersion,
+        projectRoot: status.health.projectRoot,
+        stateDirectory: status.stateDirectory,
+      },
+    },
+    {
+      name: "protocol_version",
+      status: status.protocolVersion === status.health.protocolVersion ? "ok" : "fail",
+      message:
+        status.protocolVersion === status.health.protocolVersion
+          ? `protocol ${status.protocolVersion}`
+          : `client protocol ${status.protocolVersion} differs from daemon protocol ${status.health.protocolVersion}`,
+    },
+    {
+      name: "schema_version",
+      status: status.health.schemaVersion === 1 ? "ok" : "fail",
+      message: `schema ${status.health.schemaVersion}`,
+    },
+    {
+      name: "queue_depth",
+      status: status.health.queueDepth > 0 ? "warn" : "ok",
+      message: `${status.health.queueDepth} pending index batches`,
+    },
+    {
+      name: "index_state",
+      status: status.health.indexedFiles > 0 ? "ok" : "warn",
+      message: `${status.health.indexedFiles} files indexed`,
+    },
+    {
+      name: "findings_cache",
+      status: "ok",
+      message: `${status.health.findingsCacheEntries} cached finding sets`,
+    },
+  ];
+  return makeHealthReport({
+    source: "codemem",
+    checks,
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+  });
 }
 
 function formatCheck(check: CheckResponse): string {

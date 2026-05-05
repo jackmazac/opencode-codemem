@@ -4,12 +4,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { plugin } from "bun";
-import type {
-  ApiSurfaceRequest,
-  ApiSurfaceResponse,
-  CheckRequest,
-  CheckResponse,
-} from "../packages/codemem-shared/src/protocol";
 
 plugin({
   name: "codemem-source-alias",
@@ -28,51 +22,20 @@ plugin({
   },
 });
 
-const { defaultCodeMemConfig } = await import("../packages/codemem-shared/src/config");
-const { DaemonClient } = await import("../packages/codemem-plugin/src/daemon/client");
-const { createCodeMemTools } = await import("../packages/codemem-plugin/src/tools");
+const expectedTools = [
+  "codemem_check",
+  "codemem_drift_map",
+  "codemem_conflicts",
+  "codemem_change_risk",
+  "codemem_before_edit",
+  "codemem_review_focus",
+  "codemem_api_surface",
+  "codemem_impact_cone",
+  "codemem_layer_boundaries",
+  "codemem_artifact",
+];
 
-class SmokeClient extends DaemonClient {
-  constructor() {
-    super({
-      address: "runtime-smoke",
-      connectTimeoutMs: 1,
-      maxPayloadBytes: 1024 * 1024,
-      requestTimeoutMs: 1,
-    });
-  }
-
-  override async check(_params: CheckRequest): Promise<CheckResponse> {
-    return {
-      findings: [],
-      indexedAtUnixMs: Date.now(),
-      stats: {
-        cloneBuckets: 0,
-        filesIndexed: 1,
-        scanLatencyMs: 0,
-        sessionsTracked: 0,
-        typeBuckets: 0,
-      },
-      truncated: false,
-    };
-  }
-
-  override async apiSurface(_params: ApiSurfaceRequest): Promise<ApiSurfaceResponse> {
-    return {
-      exports: [
-        {
-          exportName: "alpha",
-          signature: "export const alpha: (input: Alpha) => string",
-          sourceFile: "src/alpha.ts",
-        },
-      ],
-      indexedAtUnixMs: Date.now(),
-      total: 1,
-      truncated: false,
-    };
-  }
-}
-
+const { default: codememPlugin } = await import("../packages/codemem-plugin/src/index");
 const temp = await mkdtemp(path.join(os.tmpdir(), "codemem-runtime-smoke-"));
 
 try {
@@ -80,49 +43,29 @@ try {
   await writeFile(path.join(temp, "package.json"), JSON.stringify({ type: "module" }, null, 2));
   await writeFile(
     path.join(temp, "src", "alpha.ts"),
-    "export type Alpha = { id: string }\nexport const alpha = (input: Alpha) => input.id\n",
+    "export type Alpha = { id: string };\nexport const alpha = (input: Alpha) => input.id;\n",
   );
 
-  const client = new SmokeClient();
-  const tools = createCodeMemTools({
-    projectRoot: temp,
-    async getConfig() {
-      return { path: null, config: defaultCodeMemConfig() };
+  const hooks = await codememPlugin({
+    client: {},
+    project: { id: "runtime-smoke", path: temp },
+    directory: temp,
+    worktree: temp,
+    experimental_workspace: {
+      async register() {},
     },
-    async ensureReady() {
-      return client;
-    },
-    async maybeInjectSignals() {},
+    serverUrl: "http://localhost",
   });
-
-  const context = {
-    sessionID: "runtime-smoke-session",
-    messageID: "runtime-smoke-message",
-    callID: "runtime-smoke-call",
-    metadata() {},
-  };
-
-  const check = await tools.codemem_check.execute(
-    { maxFindings: 10, includeEvidence: true, waitForFreshIndex: false },
-    context,
-  );
-  const checkJson: unknown = JSON.parse(check.output);
-  assertObject(checkJson, "codemem_check output");
-  assert(Array.isArray(checkJson.findings), "codemem_check output must include findings array");
-
-  const apiSurface = await tools.codemem_api_surface.execute({ maxExports: 10 }, context);
-  const apiSurfaceJson: unknown = JSON.parse(apiSurface.output);
-  assertObject(apiSurfaceJson, "codemem_api_surface output");
-  assert(
-    Array.isArray(apiSurfaceJson.exports),
-    "codemem_api_surface output must include exports array",
-  );
+  const tools = Object.keys(hooks.tool ?? {}).sort();
+  assert.deepEqual(tools, [...expectedTools].sort());
+  assert.equal(typeof hooks["tool.execute.after"], "function");
 
   console.log(
     JSON.stringify(
       {
         ok: true,
-        tools: ["codemem_check", "codemem_api_surface"],
+        tools,
+        hooks: Object.keys(hooks).filter((name) => name !== "tool").sort(),
         projectRoot: temp,
       },
       null,
@@ -131,9 +74,4 @@ try {
   );
 } finally {
   await rm(temp, { recursive: true, force: true });
-}
-
-function assertObject(value: unknown, name: string): asserts value is Record<string, unknown> {
-  assert.equal(typeof value, "object", `${name} must be an object`);
-  assert.notEqual(value, null, `${name} must not be null`);
 }

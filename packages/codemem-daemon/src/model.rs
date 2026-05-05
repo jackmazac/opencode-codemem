@@ -111,6 +111,25 @@ pub struct StoreStats {
     pub findings_cache_entries: usize,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexJobRecord {
+    pub id: String,
+    pub kind: String,
+    pub strategy: String,
+    pub status: String,
+    pub cursor_json: String,
+    pub lease_owner: Option<String>,
+    pub lease_expires_at_ms: Option<i64>,
+    pub processed_count: i64,
+    pub inserted_count: i64,
+    pub error_summary: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub started_at_ms: Option<i64>,
+    pub finished_at_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriftMapNode {
     pub id: String,

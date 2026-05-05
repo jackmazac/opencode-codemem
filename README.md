@@ -27,7 +27,7 @@ bun install
 bun run verify
 ```
 
-This runs TypeScript typecheck, Bun tests, Rust tests, the release daemon build, and local package creation. Package artifacts are written to `artifacts/`:
+This runs TypeScript typecheck, Bun tests, Rust tests, the release daemon build, local package creation, runtime smoke, packaged smoke, and quick bench thresholds. Package artifacts are written to `artifacts/`:
 
 - `artifacts/codemem-shared-0.1.0.tgz`
 - `artifacts/codemem-plugin-0.1.1.tgz`
@@ -101,7 +101,7 @@ You usually do not need `daemon.binaryPath` for packaged installs because the pl
 3. The daemon creates local state under `.git/codemem` by default, or `.codemem` if no Git directory exists.
 4. Run `codemem_check` from OpenCode, or use `codemem status --json` from a terminal.
 
-The first cold run boots the daemon, scans the repo, stores the symbol/clone/type indexes, and returns compact JSON findings designed for agents.
+Daemon startup does not scan the repo. Indexing is driven by explicit tool paths, fresh-index requests, rebuild jobs, or file-change events. When index state is stale or empty, tools return bounded advisory JSON and health surfaces warn rather than hiding the degraded state.
 
 ## Plugin tools
 
@@ -163,6 +163,8 @@ codemem artifact --kind audit --slug codemem-audit --apply --json
 codemem artifact --kind journal --apply --json
 codemem change-delta --from <ref> --to <ref> --json
 ```
+
+`codemem doctor --json` emits a canonical Fleet `HealthReport` with daemon health, protocol/schema checks, queue depth, queue drops, failed index batches, and index/cache state. Apply-mode maintenance and rebuild operations acquire store-backed leases so compaction and rebuild work cannot silently race active writer paths.
 
 ## Daemon architecture
 

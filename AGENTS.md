@@ -46,6 +46,8 @@ Transport: Unix domain socket (named pipe on Windows), length-prefixed JSON, JSO
 - Bench gates: `bun run bench:threshold -- --quick` must pass before commit. Thresholds live in `bench/thresholds.json`.
 - Tool parity: every CLI command that exposes useful advisory data should have a corresponding plugin tool. Wave 5 closed the 4-tool gap (added `codemem_api_surface`, `codemem_impact_cone`, `codemem_layer_boundaries`, `codemem_artifact`). Total: 10 tools.
 - Plugin startup is lazy. No indexing, parsing, or daemon contact in plugin init. The daemon is started only when a `codemem_*` tool is invoked or a write event is enqueued.
+- Daemon startup must not run a full-repo bootstrap scan. Broad indexing is explicit job/rebuild work or bounded fresh-index work, and queue drops/failures must be visible in health.
+- `doctor --json` emits a canonical Fleet `HealthReport`. Do not reintroduce legacy `status: pass` doctor output.
 
 ## Type safety rules
 
