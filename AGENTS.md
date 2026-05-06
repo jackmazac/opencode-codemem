@@ -48,6 +48,9 @@ Transport: Unix domain socket (named pipe on Windows), length-prefixed JSON, JSO
 - Plugin startup is lazy. No indexing, parsing, or daemon contact in plugin init. The daemon is started only when a `codemem_*` tool is invoked or a write event is enqueued.
 - Daemon startup must not run a full-repo bootstrap scan. Broad indexing is explicit job/rebuild work or bounded fresh-index work, and queue drops/failures must be visible in health.
 - `doctor --json` emits a canonical Fleet `HealthReport`. Do not reintroduce legacy `status: pass` doctor output.
+- Daemon reuse is health-first. Supervisors must attach to an already healthy daemon before spawning, coordinate starts with `run/codemem.start.lock`, and remove stale PID/socket/lock state only after proving the recorded owner is not alive.
+- Daemon lifecycle failures must be visible. Spawn stdout/stderr go to `log/daemon.stdout.log` and `log/daemon.stderr.log`; lifecycle events go to `log/daemon.lifecycle.jsonl` and Host Adapter telemetry. Do not return to silent `stdio: "ignore"` failure modes.
+- Cleanup is explicit. Use `codemem stop` for graceful shutdown and `codemem cleanup --stale` for stale state cleanup. Do not rely on an OpenCode plugin shutdown hook; the SDK does not provide one.
 
 ## Type safety rules
 

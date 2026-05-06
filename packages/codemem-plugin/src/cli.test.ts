@@ -40,6 +40,26 @@ describe("parseCliArgs", () => {
     });
   });
 
+  test("parses daemon stop and stale cleanup commands", () => {
+    expect(parseCliArgs(["stop", "--json", "--project-root", "/repo"], "/fallback")).toEqual({
+      ok: true,
+      command: {
+        kind: "stop",
+        json: true,
+        projectRoot: "/repo",
+      },
+    });
+    expect(parseCliArgs(["cleanup", "--stale", "--json", "--project-root", "/repo"], "/fallback")).toEqual({
+      ok: true,
+      command: {
+        kind: "cleanup",
+        json: true,
+        projectRoot: "/repo",
+        stale: true,
+      },
+    });
+  });
+
   test("resolves relative project roots against the invocation cwd", () => {
     const parsed = parseCliArgs(["status", "--project-root", "."], "/repo");
 
@@ -332,6 +352,14 @@ describe("runCodeMemCli", () => {
             indexedFiles: 2,
             findingsCacheEntries: 0,
           },
+          lifecycle: {
+            pid: 123,
+            endpoint: "/repo/.git/codemem/run/codemem.sock",
+            pidFile: "/repo/.git/codemem/run/codemem.pid",
+            stdoutLogFile: "/repo/.git/codemem/log/daemon.stdout.log",
+            stderrLogFile: "/repo/.git/codemem/log/daemon.stderr.log",
+            lifecycleLogFile: "/repo/.git/codemem/log/daemon.lifecycle.jsonl",
+          },
           stateDirectory: "/repo/.git/codemem",
           protocolVersion: 1,
         };
@@ -374,6 +402,14 @@ describe("runCodeMemCli", () => {
         indexedFiles: 2,
         findingsCacheEntries: 0,
       },
+        lifecycle: {
+          pid: 123,
+          endpoint: "/repo/.git/codemem/run/codemem.sock",
+          pidFile: "/repo/.git/codemem/run/codemem.pid",
+          stdoutLogFile: "/repo/.git/codemem/log/daemon.stdout.log",
+          stderrLogFile: "/repo/.git/codemem/log/daemon.stderr.log",
+          lifecycleLogFile: "/repo/.git/codemem/log/daemon.lifecycle.jsonl",
+        },
       stateDirectory: "/repo/.git/codemem",
       protocolVersion: 1,
     });

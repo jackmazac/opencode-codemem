@@ -33,6 +33,8 @@ import {
   type RpcMethod,
   type RpcMethodMap,
   type RpcResponseEnvelope,
+  type ShutdownRequest,
+  type ShutdownResponse,
   type StatusRequest,
   type StatusResponse,
 } from "@codemem/shared/protocol";
@@ -102,6 +104,10 @@ export class DaemonClient {
 
   rebuild(params: RebuildRequest): Promise<RebuildResponse> {
     return this.request("maintenance.rebuild", params, { timeoutMs: 30_000 });
+  }
+
+  shutdown(params: ShutdownRequest): Promise<ShutdownResponse> {
+    return this.request("maintenance.shutdown", params, { timeoutMs: this.endpoint.requestTimeoutMs });
   }
 
   async request<M extends RpcMethod>(

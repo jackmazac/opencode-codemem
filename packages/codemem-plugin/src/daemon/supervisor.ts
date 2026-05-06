@@ -6,6 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CodeMemConfig } from "@codemem/shared/config";
 import { CODEMEM_PROTOCOL_VERSION, type HealthResponse } from "@codemem/shared/protocol";
+import { makeEnvelope } from "@jackmazac/opencode-fleet-contracts";
+import { emitFleet } from "@jackmazac/opencode-host-adapter";
 import { DaemonClient, type DaemonEndpoint } from "./client";
 
 export type SupervisorOptions = {
@@ -25,10 +27,40 @@ export type DaemonCommandResolutionOptions = {
 
 export type SupervisorStatus = {
   started: boolean;
+  reused: boolean;
   endpoint: string;
   pidFile: string;
   authTokenFile: string;
+  startLockFile: string;
+  stdoutLogFile: string;
+  stderrLogFile: string;
+  lifecycleLogFile: string;
   health?: HealthResponse;
+  warning?: string;
+  staleCleanup?: StaleEndpointCleanup;
+};
+
+export type LifecycleLogPaths = {
+  stdout: string;
+  stderr: string;
+  lifecycle: string;
+};
+
+export type StaleEndpointCleanup = {
+  pid: number | null;
+  pidAlive: boolean;
+  removedEndpoint: boolean;
+  removedPidFile: boolean;
+};
+
+export type DaemonStopResult = {
+  stopped: boolean;
+  pid: number | null;
+  endpoint: string;
+  pidFile: string;
+  shutdownRequested: boolean;
+  signaled: boolean;
+  staleCleanup: StaleEndpointCleanup;
   warning?: string;
 };
 
@@ -38,8 +70,10 @@ export class DaemonSupervisor {
   private readonly config: CodeMemConfig;
   private readonly endpointAddress: string;
   private readonly pidFile: string;
+  private readonly startLockFile: string;
   private readonly authTokenFile: string;
   private readonly authToken: string;
+  private readonly logs: LifecycleLogPaths;
   private startPromise: Promise<SupervisorStatus> | null = null;
   private lastWarning: string | null = null;
 
@@ -50,8 +84,10 @@ export class DaemonSupervisor {
     const fingerprint = projectFingerprint(this.projectRoot);
     this.endpointAddress = resolveEndpointAddress(this.stateDirectory, fingerprint);
     this.pidFile = path.join(this.stateDirectory, "run", "codemem.pid");
+    this.startLockFile = path.join(this.stateDirectory, "run", "codemem.start.lock");
     this.authTokenFile = path.join(this.stateDirectory, "run", "codemem.token");
     this.authToken = readExistingAuthToken(this.authTokenFile) ?? crypto.randomBytes(16).toString("hex");
+    this.logs = resolveLifecycleLogPaths(this.stateDirectory);
   }
 
   get warning(): string | null {
@@ -80,11 +116,17 @@ export class DaemonSupervisor {
   async ensureDaemon(waitForReady: boolean): Promise<SupervisorStatus> {
     const healthy = await this.health();
     if (healthy) {
+      await this.recordLifecycle("daemon.attach", { reused: true, pidFile: this.pidFile });
       return {
         started: true,
+        reused: true,
         endpoint: this.endpointAddress,
         pidFile: this.pidFile,
+        startLockFile: this.startLockFile,
         authTokenFile: this.authTokenFile,
+        stdoutLogFile: this.logs.stdout,
+        stderrLogFile: this.logs.stderr,
+        lifecycleLogFile: this.logs.lifecycle,
         health: healthy,
       };
     }
@@ -103,89 +145,204 @@ export class DaemonSupervisor {
     await this.ensureDaemon(false);
   }
 
+  async cleanupStale(): Promise<StaleEndpointCleanup> {
+    return cleanupStaleEndpoint(this.endpointAddress, this.pidFile);
+  }
+
+  async stop(): Promise<DaemonStopResult> {
+    const pid = await readPid(this.pidFile);
+    let shutdownRequested = false;
+    let signaled = false;
+    const healthy = await this.health();
+    if (healthy) {
+      try {
+        const response = await this.createClient().shutdown({ projectRoot: this.projectRoot });
+        shutdownRequested = response.accepted;
+      } catch (error) {
+        this.lastWarning = `Failed to request codemem-daemon shutdown: ${String(error)}`;
+        await this.recordLifecycle("daemon.stop_failed", { warning: this.lastWarning });
+      }
+    }
+    const exitedAfterShutdown = pid ? await waitForPidExit(pid, 1_000) : true;
+    if (pid && !exitedAfterShutdown && isPidAlive(pid)) {
+      try {
+        process.kill(pid, "SIGTERM");
+        signaled = true;
+      } catch (error) {
+        this.lastWarning = `Failed to signal codemem-daemon ${pid}: ${String(error)}`;
+        await this.recordLifecycle("daemon.stop_failed", { warning: this.lastWarning, pid });
+      }
+    }
+    const exitedAfterSignal = pid ? await waitForPidExit(pid, 1_000) : true;
+    const staleCleanup = await cleanupStaleEndpoint(this.endpointAddress, this.pidFile);
+    const stopped = !pid || exitedAfterShutdown || exitedAfterSignal || !isPidAlive(pid);
+    await this.recordLifecycle(stopped ? "daemon.stopped" : "daemon.stop_failed", {
+      pid,
+      shutdownRequested,
+      signaled,
+      stopped,
+    });
+    const result: DaemonStopResult = {
+      stopped,
+      pid,
+      endpoint: this.endpointAddress,
+      pidFile: this.pidFile,
+      shutdownRequested,
+      signaled,
+      staleCleanup,
+    };
+    if (!stopped) {
+      result.warning = this.lastWarning ?? `codemem-daemon ${pid} is still alive`;
+    }
+    return result;
+  }
+
   private async start(waitForReady: boolean): Promise<SupervisorStatus> {
     await fs.mkdir(path.join(this.stateDirectory, "run"), { recursive: true });
     await fs.mkdir(path.join(this.stateDirectory, "log"), { recursive: true });
     await fs.writeFile(this.authTokenFile, this.authToken, { mode: 0o600 });
-    await removeStaleEndpoint(this.endpointAddress, this.pidFile);
-
-    const command = await this.resolveCommand();
-    const env = {
-      ...process.env,
-      CODEMEM_PROJECT_ROOT: this.projectRoot,
-      CODEMEM_STATE_DIR: this.stateDirectory,
-      CODEMEM_ENDPOINT: this.endpointAddress,
-      CODEMEM_AUTH_TOKEN: this.authToken,
-      CODEMEM_PROTOCOL_VERSION: String(CODEMEM_PROTOCOL_VERSION),
-    };
-
-    if (typeof Bun === "undefined") {
-      this.lastWarning = "Bun runtime unavailable; cannot launch codemem-daemon from plugin";
-      return {
-        started: false,
-        endpoint: this.endpointAddress,
-        pidFile: this.pidFile,
-        authTokenFile: this.authTokenFile,
-        warning: this.lastWarning,
-      };
+    const staleCleanup = await cleanupStaleEndpoint(this.endpointAddress, this.pidFile);
+    if (staleCleanup.removedEndpoint || staleCleanup.removedPidFile) {
+      await this.recordLifecycle("daemon.stale_cleaned", staleCleanup);
     }
 
-    try {
-      const child = Bun.spawn({
-        cmd: command,
-        cwd: this.projectRoot,
-        env,
-        detached: true,
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
+    const startLock = await acquireStartLock(this.startLockFile);
+    if (!startLock.acquired) {
+      await this.recordLifecycle("daemon.start_wait", {
+        lockOwnerPid: startLock.ownerPid,
+        lockPath: this.startLockFile,
       });
-
-      await fs.writeFile(this.pidFile, String(child.pid), { mode: 0o600 });
-    } catch (error) {
-      this.lastWarning = `Failed to spawn codemem-daemon: ${String(error)}`;
-      return {
-        started: false,
-        endpoint: this.endpointAddress,
-        pidFile: this.pidFile,
-        authTokenFile: this.authTokenFile,
-        warning: this.lastWarning,
-      };
+      const attached = await this.waitForHealthy(waitForReady);
+      if (attached) {
+        return {
+          started: true,
+          reused: true,
+          endpoint: this.endpointAddress,
+          pidFile: this.pidFile,
+          startLockFile: this.startLockFile,
+          authTokenFile: this.authTokenFile,
+          stdoutLogFile: this.logs.stdout,
+          stderrLogFile: this.logs.stderr,
+          lifecycleLogFile: this.logs.lifecycle,
+          health: attached,
+          staleCleanup,
+        };
+      }
+      this.lastWarning = `codemem-daemon did not become healthy while another process held ${this.startLockFile}`;
+      await this.recordLifecycle("daemon.start_failed", { warning: this.lastWarning });
+      return this.unavailableStatus(staleCleanup);
     }
 
-    if (!waitForReady) {
-      return {
-        started: true,
-        endpoint: this.endpointAddress,
-        pidFile: this.pidFile,
-        authTokenFile: this.authTokenFile,
+    let releaseLockOnExit = true;
+    try {
+      const command = await this.resolveCommand();
+      const env = {
+        ...process.env,
+        CODEMEM_PROJECT_ROOT: this.projectRoot,
+        CODEMEM_STATE_DIR: this.stateDirectory,
+        CODEMEM_ENDPOINT: this.endpointAddress,
+        CODEMEM_AUTH_TOKEN: this.authToken,
+        CODEMEM_PROTOCOL_VERSION: String(CODEMEM_PROTOCOL_VERSION),
       };
-    }
 
-    const deadline = Date.now() + this.config.daemon.spawnTimeoutMs;
-    while (Date.now() < deadline) {
-      const healthy = await this.health();
+      if (typeof Bun === "undefined") {
+        this.lastWarning = "Bun runtime unavailable; cannot launch codemem-daemon from plugin";
+        await this.recordLifecycle("daemon.start_failed", { warning: this.lastWarning });
+        return this.unavailableStatus(staleCleanup);
+      }
+
+      try {
+        const child = spawnDetached(command, this.projectRoot, env, this.logs);
+        if (!child.pid) {
+          throw new Error("spawn returned no child pid");
+        }
+        await fs.writeFile(this.pidFile, String(child.pid), { mode: 0o600 });
+        await this.recordLifecycle("daemon.spawned", { pid: child.pid, stdout: this.logs.stdout, stderr: this.logs.stderr });
+      } catch (error) {
+        this.lastWarning = `Failed to spawn codemem-daemon: ${String(error)}`;
+        await this.recordLifecycle("daemon.start_failed", { warning: this.lastWarning });
+        return this.unavailableStatus(staleCleanup);
+      }
+
+      if (!waitForReady) {
+        releaseLockOnExit = false;
+        void this.waitForHealthy(true).finally(() => releaseStartLock(this.startLockFile));
+        return {
+          started: true,
+          reused: false,
+          endpoint: this.endpointAddress,
+          pidFile: this.pidFile,
+          startLockFile: this.startLockFile,
+          authTokenFile: this.authTokenFile,
+          stdoutLogFile: this.logs.stdout,
+          stderrLogFile: this.logs.stderr,
+          lifecycleLogFile: this.logs.lifecycle,
+          staleCleanup,
+        };
+      }
+
+      const healthy = await this.waitForHealthy(true);
       if (healthy) {
         this.lastWarning = null;
         return {
           started: true,
+          reused: false,
           endpoint: this.endpointAddress,
           pidFile: this.pidFile,
+          startLockFile: this.startLockFile,
           authTokenFile: this.authTokenFile,
+          stdoutLogFile: this.logs.stdout,
+          stderrLogFile: this.logs.stderr,
+          lifecycleLogFile: this.logs.lifecycle,
           health: healthy,
+          staleCleanup,
         };
+      }
+
+      this.lastWarning = `codemem-daemon did not become healthy within ${this.config.daemon.spawnTimeoutMs}ms`;
+      await this.recordLifecycle("daemon.start_failed", { warning: this.lastWarning });
+      return this.unavailableStatus(staleCleanup);
+    } finally {
+      if (releaseLockOnExit) {
+        await releaseStartLock(this.startLockFile);
+      }
+    }
+  }
+
+  private async waitForHealthy(waitForReady: boolean): Promise<HealthResponse | null> {
+    if (!waitForReady) {
+      return null;
+    }
+    const deadline = Date.now() + this.config.daemon.spawnTimeoutMs;
+    while (Date.now() < deadline) {
+      const healthy = await this.health();
+      if (healthy) {
+        return healthy;
       }
       await sleep(60);
     }
+    return null;
+  }
 
-    this.lastWarning = `codemem-daemon did not become healthy within ${this.config.daemon.spawnTimeoutMs}ms`;
-    return {
+  private unavailableStatus(staleCleanup?: StaleEndpointCleanup): SupervisorStatus {
+    const status: SupervisorStatus = {
       started: false,
+      reused: false,
       endpoint: this.endpointAddress,
       pidFile: this.pidFile,
+      startLockFile: this.startLockFile,
       authTokenFile: this.authTokenFile,
-      warning: this.lastWarning,
+      stdoutLogFile: this.logs.stdout,
+      stderrLogFile: this.logs.stderr,
+      lifecycleLogFile: this.logs.lifecycle,
     };
+    if (this.lastWarning !== null) {
+      status.warning = this.lastWarning;
+    }
+    if (staleCleanup) {
+      status.staleCleanup = staleCleanup;
+    }
+    return status;
   }
 
   private async resolveCommand(): Promise<string[]> {
@@ -194,6 +351,35 @@ export class DaemonSupervisor {
       config: this.config,
     });
   }
+
+  private async recordLifecycle(kind: `${string}.${string}`, detail: Record<string, unknown>): Promise<void> {
+    emitDaemonTelemetry("codemem", kind, detail);
+    try {
+      await fs.mkdir(path.dirname(this.logs.lifecycle), { recursive: true });
+      await fs.appendFile(
+        this.logs.lifecycle,
+        `${JSON.stringify({ ts: new Date().toISOString(), kind, ...detail })}\n`,
+      );
+    } catch {
+      // lifecycle logging is best-effort and must not break daemon startup
+    }
+  }
+}
+
+function emitDaemonTelemetry(
+  plugin: string,
+  kind: `${string}.${string}`,
+  detail: Record<string, unknown>,
+): void {
+  const errorMessage = typeof detail.warning === "string" ? detail.warning : undefined;
+  emitFleet(
+    makeEnvelope({
+      kind,
+      plugin,
+      status: errorMessage ? "error" : "ok",
+      error: errorMessage ? { message: errorMessage } : undefined,
+    }),
+  );
 }
 
 export async function resolveDaemonCommand(options: DaemonCommandResolutionOptions): Promise<string[]> {
@@ -244,26 +430,43 @@ export function resolveEndpointAddress(stateDirectory: string, fingerprint: stri
   return path.join(os.tmpdir(), `codemem-${fingerprint}.sock`);
 }
 
-async function removeStaleEndpoint(endpointAddress: string, pidFile: string): Promise<void> {
+export function resolveLifecycleLogPaths(stateDirectory: string): LifecycleLogPaths {
+  const logDirectory = path.join(stateDirectory, "log");
+  return {
+    stdout: path.join(logDirectory, "daemon.stdout.log"),
+    stderr: path.join(logDirectory, "daemon.stderr.log"),
+    lifecycle: path.join(logDirectory, "daemon.lifecycle.jsonl"),
+  };
+}
+
+export async function cleanupStaleEndpoint(
+  endpointAddress: string,
+  pidFile: string,
+): Promise<StaleEndpointCleanup> {
   const pid = await readPid(pidFile);
   const alive = pid ? isPidAlive(pid) : false;
   if (alive) {
-    return;
+    return { pid, pidAlive: true, removedEndpoint: false, removedPidFile: false };
   }
 
+  let removedEndpoint = false;
   if (process.platform !== "win32") {
     try {
       await fs.rm(endpointAddress, { force: true });
+      removedEndpoint = true;
     } catch {
       // ignore stale socket removal errors
     }
   }
 
+  let removedPidFile = false;
   try {
     await fs.rm(pidFile, { force: true });
+    removedPidFile = true;
   } catch {
     // ignore stale pid file removal errors
   }
+  return { pid, pidAlive: false, removedEndpoint, removedPidFile };
 }
 
 async function readPid(pidFile: string): Promise<number | null> {
@@ -292,6 +495,114 @@ function isPidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) {
+      return true;
+    }
+    await sleep(40);
+  }
+  return !isPidAlive(pid);
+}
+
+type StartLockResult =
+  | { acquired: true; ownerPid?: number; staleRemoved: boolean }
+  | { acquired: false; ownerPid?: number; staleRemoved: boolean };
+
+async function acquireStartLock(lockPath: string): Promise<StartLockResult> {
+  const ownerPid = await readPid(lockPath);
+  const staleRemoved = ownerPid ? !isPidAlive(ownerPid) : false;
+  if (staleRemoved) {
+    await fs.rm(lockPath, { force: true });
+  }
+  try {
+    writeExclusiveFile(lockPath, `${currentPid()}\n`);
+    return startLockResult(true, ownerPid, staleRemoved);
+  } catch {
+    return startLockResult(false, ownerPid, staleRemoved);
+  }
+}
+
+async function releaseStartLock(lockPath: string): Promise<void> {
+  await fs.rm(lockPath, { force: true });
+}
+
+function spawnDetached(
+  command: string[],
+  cwd: string,
+  env: Record<string, string | undefined>,
+  logs: LifecycleLogPaths,
+) {
+  const executable = command[0];
+  if (!executable) {
+    throw new Error("daemon command is empty");
+  }
+  fsSync.mkdirSync(path.dirname(logs.stdout), { recursive: true });
+  const spawnEnv = {
+    ...env,
+    CODEMEM_DAEMON_STDOUT: logs.stdout,
+    CODEMEM_DAEMON_STDERR: logs.stderr,
+  };
+  const cmd =
+    process.platform === "win32"
+      ? [executable, ...command.slice(1)]
+      : [
+          "/bin/sh",
+          "-c",
+          'exec "$0" "$@" >> "$CODEMEM_DAEMON_STDOUT" 2>> "$CODEMEM_DAEMON_STDERR"',
+          executable,
+          ...command.slice(1),
+        ];
+  return Bun.spawn({
+    cmd,
+    cwd,
+    env: spawnEnv,
+    detached: true,
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+}
+
+function writeExclusiveFile(filePath: string, content: string): void {
+  const openSync = Reflect.get(fsSync, "openSync");
+  const writeFileSync = Reflect.get(fsSync, "writeFileSync");
+  const closeSync = Reflect.get(fsSync, "closeSync");
+  if (
+    typeof openSync !== "function" ||
+    typeof writeFileSync !== "function" ||
+    typeof closeSync !== "function"
+  ) {
+    throw new Error("exclusive file creation is unavailable");
+  }
+  const fd = openSync(filePath, "wx", 0o600);
+  try {
+    writeFileSync(fd, content);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function currentPid(): number {
+  const pid = Reflect.get(process, "pid");
+  if (typeof pid === "number" && Number.isFinite(pid)) {
+    return pid;
+  }
+  return 0;
+}
+
+function startLockResult(
+  acquired: boolean,
+  ownerPid: number | null,
+  staleRemoved: boolean,
+): StartLockResult {
+  if (ownerPid === null) {
+    return { acquired, staleRemoved };
+  }
+  return { acquired, ownerPid, staleRemoved };
 }
 
 function defaultPackageRoot(): string {

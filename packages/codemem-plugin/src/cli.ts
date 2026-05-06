@@ -29,7 +29,7 @@ import type {
   RebuildResponse,
   StatusResponse,
 } from "@codemem/shared/protocol";
-import { DaemonSupervisor } from "./daemon/supervisor";
+import { DaemonSupervisor, type DaemonStopResult, type StaleEndpointCleanup } from "./daemon/supervisor";
 
 type BaseCliCommand = {
   json: boolean;
@@ -42,6 +42,15 @@ export type StatusCliCommand = BaseCliCommand & {
 
 export type DoctorCliCommand = BaseCliCommand & {
   kind: "doctor";
+};
+
+export type StopCliCommand = BaseCliCommand & {
+  kind: "stop";
+};
+
+export type CleanupCliCommand = BaseCliCommand & {
+  kind: "cleanup";
+  stale: boolean;
 };
 
 export type CheckCliCommand = BaseCliCommand & {
@@ -151,6 +160,8 @@ export type ArtifactEmitCliCommand = BaseCliCommand & {
 export type CliCommand =
   | StatusCliCommand
   | DoctorCliCommand
+  | StopCliCommand
+  | CleanupCliCommand
   | CheckCliCommand
   | DriftMapCliCommand
   | ConflictsCliCommand
@@ -187,6 +198,11 @@ export type ArtifactEmitResponse = {
   entry?: CodememJournalEntry;
 };
 
+export type CleanupResponse = {
+  stale: boolean;
+  cleanup: StaleEndpointCleanup;
+};
+
 export type CliParseResult =
   | { ok: true; command: CliCommand }
   | { ok: false; exitCode: number; message: string };
@@ -209,6 +225,8 @@ export type CliRuntime = {
   apiSurface(command: ApiSurfaceCliCommand): Promise<ApiSurfaceResponse>;
   layerBoundaries(command: LayerBoundariesCliCommand): Promise<LayerBoundariesResponse>;
   lockfile(command: LockfileCliCommand): Promise<LockfileResponse>;
+  stop?(command: StopCliCommand): Promise<DaemonStopResult>;
+  cleanup?(command: CleanupCliCommand): Promise<CleanupResponse>;
 };
 
 export type CliRunOptions = {
@@ -253,6 +271,25 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
           kind: "doctor",
           json: options.json,
           projectRoot: options.projectRoot,
+        },
+      };
+    case "stop":
+      return {
+        ok: true,
+        command: {
+          kind: "stop",
+          json: options.json,
+          projectRoot: options.projectRoot,
+        },
+      };
+    case "cleanup":
+      return {
+        ok: true,
+        command: {
+          kind: "cleanup",
+          json: options.json,
+          projectRoot: options.projectRoot,
+          stale: options.stale,
         },
       };
     case "check":
@@ -463,6 +500,14 @@ export async function runCodeMemCli(
   }
 
   try {
+    if (!options.runtime && parsed.command.kind === "stop") {
+      stdout(formatStop(await runStopCommand(parsed.command)));
+      return 0;
+    }
+    if (!options.runtime && parsed.command.kind === "cleanup") {
+      stdout(formatCleanup(await runCleanupCommand(parsed.command)));
+      return 0;
+    }
     const runtime = options.runtime ?? (await createDaemonRuntime(parsed.command.projectRoot));
     stdout(await executeAndFormat(parsed.command, runtime));
     return 0;
@@ -614,6 +659,30 @@ async function createDaemonRuntime(projectRoot: string): Promise<CliRuntime> {
   };
 }
 
+async function createSupervisor(projectRoot: string): Promise<DaemonSupervisor> {
+  const loaded = await loadCodeMemConfig(projectRoot);
+  const stateDirectory = await resolveStateDirectory(loaded.config, projectRoot);
+  return new DaemonSupervisor({
+    projectRoot,
+    stateDirectory,
+    config: loaded.config,
+  });
+}
+
+async function runStopCommand(command: StopCliCommand): Promise<DaemonStopResult> {
+  return (await createSupervisor(command.projectRoot)).stop();
+}
+
+async function runCleanupCommand(command: CleanupCliCommand): Promise<CleanupResponse> {
+  if (!command.stale) {
+    throw new Error("cleanup requires --stale to avoid removing live daemon state");
+  }
+  return {
+    stale: command.stale,
+    cleanup: await (await createSupervisor(command.projectRoot)).cleanupStale(),
+  };
+}
+
 async function executeAndFormat(command: CliCommand, runtime: CliRuntime): Promise<string> {
   switch (command.kind) {
     case "status": {
@@ -624,6 +693,14 @@ async function executeAndFormat(command: CliCommand, runtime: CliRuntime): Promi
       const result = await runtime.status(command.projectRoot);
       const report = createDoctorHealthReport(result);
       return command.json ? JSON.stringify(report, null, 2) : formatDoctor(report);
+    }
+    case "stop": {
+      const result = runtime.stop ? await runtime.stop(command) : await runStopCommand(command);
+      return command.json ? JSON.stringify(result, null, 2) : formatStop(result);
+    }
+    case "cleanup": {
+      const result = runtime.cleanup ? await runtime.cleanup(command) : await runCleanupCommand(command);
+      return command.json ? JSON.stringify(result, null, 2) : formatCleanup(result);
     }
     case "check": {
       const result = await runtime.check(command);
@@ -767,9 +844,16 @@ function formatStatus(status: StatusResponse): string {
     `codemem daemon: ${status.health.healthy ? "ok" : "unhealthy"}`,
     `project: ${status.health.projectRoot}`,
     `state: ${status.stateDirectory}`,
+    status.lifecycle ? `pid: ${status.lifecycle.pid ?? "unknown"}` : undefined,
+    status.lifecycle ? `endpoint: ${status.lifecycle.endpoint}` : undefined,
+    status.lifecycle ? `stdout_log: ${status.lifecycle.stdoutLogFile}` : undefined,
+    status.lifecycle ? `stderr_log: ${status.lifecycle.stderrLogFile}` : undefined,
+    status.lifecycle ? `lifecycle_log: ${status.lifecycle.lifecycleLogFile}` : undefined,
     `files_indexed: ${status.health.indexedFiles}`,
     `queue_depth: ${status.health.queueDepth}`,
-  ].join("\n");
+  ]
+    .filter((line): line is string => typeof line === "string")
+    .join("\n");
 }
 
 function formatDoctor(report: HealthReport): string {
@@ -779,6 +863,29 @@ function formatDoctor(report: HealthReport): string {
       const detail = check.message ? ` - ${check.message}` : "";
       return `${check.status}: ${check.name}${detail}`;
     }),
+  ].join("\n");
+}
+
+function formatStop(result: DaemonStopResult): string {
+  return [
+    `stopped: ${result.stopped}`,
+    `pid: ${result.pid ?? "none"}`,
+    `shutdown_requested: ${result.shutdownRequested}`,
+    `signaled: ${result.signaled}`,
+    `endpoint: ${result.endpoint}`,
+    result.warning ? `warning: ${result.warning}` : undefined,
+  ]
+    .filter((line): line is string => typeof line === "string")
+    .join("\n");
+}
+
+function formatCleanup(result: CleanupResponse): string {
+  return [
+    `stale: ${result.stale}`,
+    `pid: ${result.cleanup.pid ?? "none"}`,
+    `pid_alive: ${result.cleanup.pidAlive}`,
+    `removed_endpoint: ${result.cleanup.removedEndpoint}`,
+    `removed_pid_file: ${result.cleanup.removedPidFile}`,
   ].join("\n");
 }
 
@@ -793,6 +900,7 @@ function createDoctorHealthReport(status: StatusResponse): HealthReport {
         daemonVersion: status.health.daemonVersion,
         projectRoot: status.health.projectRoot,
         stateDirectory: status.stateDirectory,
+        lifecycle: status.lifecycle,
       },
     },
     {
@@ -957,6 +1065,7 @@ type ParsedOptions = {
   pruneLogs: boolean;
   sessionID?: string;
   slug: string;
+  stale: boolean;
   waitForFreshIndex: boolean;
 };
 
@@ -978,6 +1087,7 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
     projectRoot: path.resolve(cwd),
     pruneLogs: false,
     slug: "codemem-audit",
+    stale: false,
     waitForFreshIndex: true,
   };
 
@@ -1004,6 +1114,9 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
         break;
       case "--compact":
         options.compact = true;
+        break;
+      case "--stale":
+        options.stale = true;
         break;
       case "--baseline": {
         const value = readOptionValue(

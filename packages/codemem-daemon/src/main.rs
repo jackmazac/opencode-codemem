@@ -18,6 +18,7 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::{env, fs, path::PathBuf, sync::Arc};
+use tokio::sync::Notify;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
@@ -62,6 +63,10 @@ async fn main() -> Result<()> {
         }),
     )?;
 
+    let shutdown = Arc::new(Notify::new());
+    let cleanup_state_dir = state_dir.clone();
+    let cleanup_endpoint = endpoint.clone();
+
     let ctx = Arc::new(RpcContext {
         protocol_version,
         auth_token,
@@ -71,9 +76,23 @@ async fn main() -> Result<()> {
         config,
         indexer,
         started_at_unix_ms: Utc::now().timestamp_millis(),
+        shutdown: Arc::clone(&shutdown),
     });
 
-    serve(ctx).await
+    let result = tokio::select! {
+        result = serve(ctx) => result,
+        _ = shutdown.notified() => Ok(()),
+    };
+    cleanup(&cleanup_state_dir, &cleanup_endpoint);
+    result
+}
+
+fn cleanup(state_dir: &PathBuf, endpoint: &str) {
+    let _ = fs::remove_file(state_dir.join("run").join("codemem.pid"));
+    #[cfg(unix)]
+    {
+        let _ = fs::remove_file(endpoint);
+    }
 }
 
 fn required_path_env(key: &str) -> Result<PathBuf> {

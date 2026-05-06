@@ -267,6 +267,14 @@ export type StatusRequest = {
 
 export type StatusResponse = {
   health: HealthResponse;
+  lifecycle?: {
+    pid?: number;
+    endpoint: string;
+    pidFile: string;
+    stdoutLogFile: string;
+    stderrLogFile: string;
+    lifecycleLogFile: string;
+  };
   stateDirectory: string;
   protocolVersion: number;
 };
@@ -291,6 +299,14 @@ export type RebuildRequest = {
 export type RebuildResponse = {
   wouldRebuild: boolean;
   reason: string;
+};
+
+export type ShutdownRequest = {
+  projectRoot: string;
+};
+
+export type ShutdownResponse = {
+  accepted: boolean;
 };
 
 export type ImpactConeRequest = FleetCorrelation & {
@@ -396,6 +412,7 @@ export type RpcMethodMap = {
   "maintenance.status": { params: StatusRequest; result: StatusResponse };
   "maintenance.maintain": { params: MaintainRequest; result: MaintainResponse };
   "maintenance.rebuild": { params: RebuildRequest; result: RebuildResponse };
+  "maintenance.shutdown": { params: ShutdownRequest; result: ShutdownResponse };
 };
 
 export type RpcMethod = keyof RpcMethodMap;

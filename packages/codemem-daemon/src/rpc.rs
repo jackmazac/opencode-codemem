@@ -12,7 +12,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    sync::Notify,
+};
 
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SCHEMA_VERSION: u32 = 1;
@@ -26,6 +29,7 @@ pub struct RpcContext {
     pub config: Arc<ProjectConfig>,
     pub indexer: Arc<Indexer>,
     pub started_at_unix_ms: i64,
+    pub shutdown: Arc<Notify>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -616,9 +620,32 @@ async fn dispatch_inner(
             })?;
             Ok(json!({
                 "health": json_health(ctx, &stats),
+                "lifecycle": {
+                    "pid": std::process::id(),
+                    "endpoint": ctx.endpoint,
+                    "pidFile": ctx.state_dir.join("run").join("codemem.pid").to_string_lossy(),
+                    "stdoutLogFile": ctx.state_dir.join("log").join("daemon.stdout.log").to_string_lossy(),
+                    "stderrLogFile": ctx.state_dir.join("log").join("daemon.stderr.log").to_string_lossy(),
+                    "lifecycleLogFile": ctx.state_dir.join("log").join("daemon.lifecycle.jsonl").to_string_lossy(),
+                },
                 "stateDirectory": ctx.state_dir.to_string_lossy(),
                 "protocolVersion": ctx.protocol_version,
             }))
+        }
+        "maintenance.shutdown" => {
+            let params = deserialize_params::<HealthParams>(
+                &envelope.params,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            validate_project_root(
+                &ctx.project_root,
+                &params.project_root,
+                envelope.id.clone(),
+                ctx.protocol_version,
+            )?;
+            ctx.shutdown.notify_waiters();
+            Ok(json!({ "accepted": true }))
         }
         "maintenance.maintain" => {
             let params = deserialize_params::<MaintainParams>(
@@ -1141,6 +1168,7 @@ mod tests {
         sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
     };
+    use tokio::sync::Notify;
 
     #[tokio::test]
     async fn dispatch_rejects_wrong_auth_token() {
@@ -1412,6 +1440,7 @@ mod tests {
             config,
             indexer,
             started_at_unix_ms: 0,
+            shutdown: Arc::new(Notify::new()),
         })
     }
 
