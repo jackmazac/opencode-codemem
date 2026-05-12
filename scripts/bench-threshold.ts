@@ -6,6 +6,10 @@ import path from "node:path";
 type BenchResult = {
   name: string;
   duration_ms: number;
+  p50_ms?: number;
+  p95_ms?: number;
+  max_ms?: number;
+  output_max_bytes?: number;
   ok: boolean;
 };
 
@@ -21,6 +25,10 @@ type BenchReport = {
 type ThresholdCheck = {
   name: string;
   actual_ms: number;
+  p50_ms?: number;
+  p95_ms?: number;
+  observed_max_ms?: number;
+  output_max_bytes?: number;
   max_ms: number;
   status: "pass" | "fail";
 };
@@ -54,6 +62,10 @@ const checks = thresholdsFor(thresholds, bench.mode).map((threshold) => {
   return {
     name: threshold.name,
     actual_ms: result.duration_ms,
+    p50_ms: result.p50_ms,
+    p95_ms: result.p95_ms,
+    observed_max_ms: result.max_ms,
+    output_max_bytes: result.output_max_bytes,
     max_ms: threshold.maxMs,
     status: result.ok && result.duration_ms <= threshold.maxMs ? "pass" : "fail",
   } satisfies ThresholdCheck;

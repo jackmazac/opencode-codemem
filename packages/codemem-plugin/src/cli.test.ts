@@ -87,6 +87,7 @@ describe("parseCliArgs", () => {
         json: true,
         maxFindings: 5,
         paths: ["src/a.ts", "src/b.ts"],
+        pathsFromStdin: false,
         projectRoot: "/repo",
         waitForFreshIndex: true,
       },
@@ -174,6 +175,7 @@ describe("parseCliArgs", () => {
         kind: "impact-cone",
         depth: 3,
         json: true,
+        maxFiles: 50,
         path: "src/a.ts",
         projectRoot: "/repo",
       },
@@ -184,6 +186,7 @@ describe("parseCliArgs", () => {
         kind: "api-surface",
         json: true,
         maxExports: 100,
+        path: undefined,
         projectRoot: "/repo",
       },
     });
@@ -229,8 +232,40 @@ describe("parseCliArgs", () => {
         kind: "change-risk",
         depth: 3,
         json: true,
+        maxFiles: 50,
         maxFindings: 25,
         paths: ["src/a.ts", "src/b.ts"],
+        pathsFromStdin: false,
+        projectRoot: "/repo",
+      },
+    });
+    expect(
+      parseCliArgs(["before-edit", "--path", "src/a.ts", "--max-files", "12", "--json"], "/repo"),
+    ).toEqual({
+      ok: true,
+      command: {
+        kind: "before-edit",
+        depth: 2,
+        json: true,
+        maxFiles: 12,
+        maxFindings: 50,
+        paths: ["src/a.ts"],
+        pathsFromStdin: false,
+        projectRoot: "/repo",
+      },
+    });
+    expect(
+      parseCliArgs(["before-edit", "--paths-stdin", "--json"], "/repo"),
+    ).toEqual({
+      ok: true,
+      command: {
+        kind: "before-edit",
+        depth: 2,
+        json: true,
+        maxFiles: 50,
+        maxFindings: 50,
+        paths: [],
+        pathsFromStdin: true,
         projectRoot: "/repo",
       },
     });
@@ -242,9 +277,11 @@ describe("parseCliArgs", () => {
         kind: "review-focus",
         depth: 2,
         json: true,
+        maxFiles: 50,
         maxFindings: 50,
         maxItems: 7,
         paths: ["src/a.ts"],
+        pathsFromStdin: false,
         projectRoot: "/repo",
       },
     });
@@ -332,6 +369,28 @@ describe("parseCliArgs", () => {
       },
     );
   });
+
+  test("prints layered subcommand help without root option spam", () => {
+    const parsed = parseCliArgs(["check", "--help"], "/repo");
+
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) throw new Error("expected help");
+    expect(parsed.exitCode).toBe(0);
+    expect(parsed.message).toContain("Usage: codemem check");
+    expect(parsed.message).toContain("Examples:");
+    expect(parsed.message).toContain("codemem check --path src/index.ts --max-findings 25 --json");
+    expect(parsed.message).not.toContain("Commands:");
+  });
+
+  test("unknown options return one actionable example", () => {
+    const parsed = parseCliArgs(["check", "--wat"], "/repo");
+
+    expect(parsed).toEqual({
+      ok: false,
+      exitCode: 2,
+      message: "Unknown codemem option: --wat\n\nExample: codemem check --path src/index.ts --json",
+    });
+  });
 });
 
 describe("runCodeMemCli", () => {
@@ -351,6 +410,11 @@ describe("runCodeMemCli", () => {
             queueDepth: 0,
             indexedFiles: 2,
             findingsCacheEntries: 0,
+            metrics: {
+              operations: {},
+              counters: {},
+              capturedAtUnixMs: 1,
+            },
           },
           lifecycle: {
             pid: 123,
@@ -401,6 +465,11 @@ describe("runCodeMemCli", () => {
         queueDepth: 0,
         indexedFiles: 2,
         findingsCacheEntries: 0,
+        metrics: {
+          operations: {},
+          counters: {},
+          capturedAtUnixMs: 1,
+        },
       },
         lifecycle: {
           pid: 123,
@@ -430,6 +499,11 @@ describe("runCodeMemCli", () => {
             queueDepth: 0,
             indexedFiles: 2,
             findingsCacheEntries: 0,
+            metrics: {
+              operations: {},
+              counters: {},
+              capturedAtUnixMs: 1,
+            },
           },
           stateDirectory: "/repo/.git/codemem",
           protocolVersion: 1,
@@ -613,6 +687,105 @@ describe("runCodeMemCli", () => {
     expect(exitCode).toBe(2);
     expect(stderr.join("\n")).toContain("Invalid --max-findings value: zero");
     expect(stderr.join("\n")).toContain("Example: codemem check --max-findings 25");
+  });
+
+  test("reports parse errors as JSON envelopes when json is requested", async () => {
+    const stderr: string[] = [];
+
+    const exitCode = await runCodeMemCli(["check", "--max-findings", "zero", "--json"], {
+      cwd: "/repo",
+      stderr: (line) => stderr.push(line),
+    });
+
+    expect(exitCode).toBe(2);
+    const parsed = JSON.parse(stderr.join("\n"));
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error.code).toBe("E_CODEMEM_CLI_USAGE");
+    expect(parsed.error.example).toBe("codemem check --max-findings 25");
+    expect(parsed.operation.name).toBe("check");
+  });
+
+  test("hydrates before-edit paths from stdin", async () => {
+    const stdout: string[] = [];
+    const seenPaths: string[][] = [];
+    const runtime: CliRuntime = {
+      async status() {
+        throw new Error("status should not run");
+      },
+      async check() {
+        throw new Error("check should not run");
+      },
+      async driftMap() {
+        throw new Error("drift-map should not run");
+      },
+      async conflicts() {
+        throw new Error("conflicts should not run");
+      },
+      async maintain() {
+        throw new Error("maintain should not run");
+      },
+      async rebuild() {
+        throw new Error("rebuild should not run");
+      },
+      async beforeEdit(command) {
+        seenPaths.push(command.paths);
+        return {
+          score: 10,
+          level: "low",
+          paths: command.paths,
+          depth: command.depth,
+          reasons: [],
+          impactedFiles: ["src/a.ts"],
+          focus: [],
+          indexedAtUnixMs: 123,
+          stats: {
+            impactedFiles: 1,
+            reverseDependents: 0,
+            publicExports: 0,
+            findings: 0,
+            sessionConflicts: 0,
+          },
+        };
+      },
+      async changeRisk() {
+        throw new Error("change-risk should not run");
+      },
+      async reviewFocus() {
+        throw new Error("review-focus should not run");
+      },
+      async changeDelta() {
+        throw new Error("change-delta should not run");
+      },
+      async baselineDiff() {
+        throw new Error("baseline diff should not run");
+      },
+      async baselineWrite() {
+        throw new Error("baseline write should not run");
+      },
+      async impactCone() {
+        throw new Error("impact-cone should not run");
+      },
+      async apiSurface() {
+        throw new Error("api-surface should not run");
+      },
+      async layerBoundaries() {
+        throw new Error("layer-boundaries should not run");
+      },
+      async lockfile() {
+        throw new Error("lockfile should not run");
+      },
+    };
+
+    const exitCode = await runCodeMemCli(["before-edit", "--paths-stdin", "--json"], {
+      cwd: "/repo",
+      runtime,
+      stdin: async () => "src/a.ts\nsrc/b.ts\n",
+      stdout: (line) => stdout.push(line),
+    });
+
+    expect(exitCode).toBe(0);
+    expect(seenPaths).toEqual([["src/a.ts", "src/b.ts"]]);
+    expect(JSON.parse(stdout.join("\n")).safeToEdit).toBe(true);
   });
 
   test("smokes status through the daemon protocol against a fixture project", async () => {

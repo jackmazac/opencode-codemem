@@ -127,7 +127,7 @@ Ten tools are registered with OpenCode. All are advisory — they return structu
 
 ### Artifacts
 
-- `codemem_artifact`: emit a codemem finding or summary as a conductor-compatible artifact (audit, journal, or report kind).
+- `codemem_artifact`: emit a codemem finding or summary as a conductor-compatible artifact (audit or journal kind).
 
 ## Advisory-only invariant
 
@@ -145,10 +145,12 @@ codemem status --json
 codemem check --path src/index.ts --max-findings 25 --json
 codemem drift-map --max-findings 50 --json
 codemem conflicts --session-id sess_123 --json
+codemem before-edit --path src/index.ts --json
+printf 'src/a.ts\nsrc/b.ts\n' | codemem before-edit --paths-stdin --json
 codemem change-risk --path src/index.ts --json
 codemem review-focus --path src/index.ts --json
 codemem impact-cone --path src/index.ts --depth 2 --json
-codemem api-surface --json
+codemem api-surface --path src/public-api.ts --json
 codemem layer-boundaries --json
 codemem baseline diff --json
 codemem baseline write --apply --json
@@ -157,14 +159,16 @@ codemem maintain --apply --prune-logs --compact
 codemem rebuild --dry-run
 codemem rebuild --apply
 codemem lockfile --json
-codemem explain --finding <id> --json
+codemem explain --id dead:src/a.ts:unused --json
 codemem report --format sarif --json
 codemem artifact --kind audit --slug codemem-audit --apply --json
 codemem artifact --kind journal --apply --json
-codemem change-delta --from <ref> --to <ref> --json
+codemem change-delta --baseline .codemem/findings-baseline.json --json
 ```
 
-`codemem doctor --json` emits a canonical Fleet `HealthReport` with daemon health, protocol/schema checks, queue depth, queue drops, failed index batches, and index/cache state. Apply-mode maintenance and rebuild operations acquire store-backed leases so compaction and rebuild work cannot silently race active writer paths.
+Root help is intentionally short; run `codemem <command> --help` for layered, copy-pasteable examples. Parse/runtime failures return JSON error envelopes when `--json` is present.
+
+`codemem doctor --json` emits a canonical Fleet `HealthReport` with daemon health, protocol/schema checks, queue depth, queue drops, failed index batches, and index/cache state. `health` / `status --json` include low-overhead p50/p95 operation metrics, queue/drop counters, and truncation counters. Apply-mode maintenance and rebuild operations acquire store-backed leases so compaction and rebuild work cannot silently race active writer paths.
 
 ## Daemon architecture
 
@@ -173,7 +177,7 @@ The Rust daemon owns all expensive analysis. The TS plugin is a thin supervisor 
 - **State directory**: `.git/codemem/` (or `.codemem/` for non-Git repos)
 - **Persistence**: SQLite with WAL mode — one writer, many readers, snapshot-consistent reads
 - **Transport**: Unix domain socket (`run/codemem.sock`) with 4-byte length-prefixed JSON envelopes; named pipe on Windows
-- **Auth**: token file at `run/daemon.token`; PID at `run/daemon.pid`
+- **Auth**: token file at `run/codemem.token`; PID at `run/codemem.pid`
 - **Protocol**: JSON-RPC 2.0 envelopes with `protocolVersion`, `authToken`, `method`, `params`, `result | error`
 
 Core daemon tables: `files`, `imports`, `public_exports`, `clone_fingerprints`, `type_shapes`, `api_baseline`, `sessions`, `findings_cache`, `event_log`.

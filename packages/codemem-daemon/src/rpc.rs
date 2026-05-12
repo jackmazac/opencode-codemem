@@ -128,6 +128,7 @@ struct ImpactConeParams {
     project_root: String,
     path: String,
     depth: usize,
+    max_files: Option<usize>,
     #[serde(default, flatten)]
     correlation: FleetCorrelation,
 }
@@ -139,6 +140,7 @@ struct ChangeRiskParams {
     paths: Vec<String>,
     depth: usize,
     max_findings: usize,
+    max_files: Option<usize>,
     #[serde(rename = "sessionID")]
     session_id: Option<String>,
     #[serde(default, flatten)]
@@ -149,6 +151,7 @@ struct ChangeRiskParams {
 #[serde(rename_all = "camelCase")]
 struct ApiSurfaceParams {
     project_root: String,
+    path: Option<String>,
     max_exports: usize,
     #[serde(default, flatten)]
     correlation: FleetCorrelation,
@@ -410,7 +413,8 @@ async fn dispatch_inner(
             )?;
             let _ = &params.turn_id;
             let _ = params.observed_at_unix_ms;
-            ctx.indexer
+            let accepted = ctx
+                .indexer
                 .enqueue_files(
                     params.session_id.clone(),
                     params.files.clone(),
@@ -421,7 +425,12 @@ async fn dispatch_inner(
                 .map_err(|error| {
                     response_from_error(envelope.id.clone(), ctx.protocol_version, error)
                 })?;
-            Ok(json!({ "accepted": true }))
+            Ok(json!({
+                "accepted": accepted,
+                "dropped": !accepted,
+                "droppedBatches": ctx.indexer.dropped_batches(),
+                "queueDepth": ctx.indexer.queue_depth(),
+            }))
         }
         "analysis.check" => {
             let params = deserialize_params::<CheckParams>(
@@ -512,7 +521,11 @@ async fn dispatch_inner(
             record_rpc_correlation(&ctx, "analysis.impactCone", &params.correlation)?;
             let summary = ctx
                 .indexer
-                .impact_cone(&params.path, params.depth)
+                .impact_cone(
+                    &params.path,
+                    params.depth,
+                    normalize_max_files(params.max_files, &ctx.config),
+                )
                 .map_err(|error| {
                     response_from_error(envelope.id.clone(), ctx.protocol_version, error)
                 })?;
@@ -538,6 +551,7 @@ async fn dispatch_inner(
                     params.depth,
                     params.session_id.as_deref(),
                     normalize_max_findings(params.max_findings, &ctx.config),
+                    normalize_max_files(params.max_files, &ctx.config),
                 )
                 .map_err(|error| {
                     response_from_error(envelope.id.clone(), ctx.protocol_version, error)
@@ -559,7 +573,7 @@ async fn dispatch_inner(
             record_rpc_correlation(&ctx, "analysis.apiSurface", &params.correlation)?;
             let summary = ctx
                 .indexer
-                .api_surface(params.max_exports)
+                .api_surface_for_path(params.path.clone(), params.max_exports)
                 .map_err(|error| {
                     response_from_error(envelope.id.clone(), ctx.protocol_version, error)
                 })?;
@@ -711,7 +725,7 @@ fn deserialize_params<T: for<'de> Deserialize<'de>>(
             "invalid_params",
             &error.to_string(),
             false,
-            Some(json!({ "params": value })),
+            Some(redacted_param_details(value)),
         )
     })
 }
@@ -746,6 +760,24 @@ fn normalize_max_findings(value: usize, config: &ProjectConfig) -> usize {
         value
     };
     requested.min(config.max_findings.max(1)).max(1)
+}
+
+fn normalize_max_files(value: Option<usize>, config: &ProjectConfig) -> usize {
+    value.unwrap_or(50).max(1).min(config.max_findings.max(200))
+}
+
+fn redacted_param_details(value: &Value) -> Value {
+    let param_bytes = serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    let param_keys = value
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    json!({
+        "paramKeys": param_keys,
+        "paramBytes": param_bytes,
+    })
 }
 
 fn record_rpc_correlation(
@@ -804,10 +836,20 @@ fn json_health(ctx: &RpcContext, stats: &StoreStats) -> Value {
     let queue_depth = ctx.indexer.queue_depth();
     let dropped_batches = ctx.indexer.dropped_batches();
     let failed_batches = ctx.indexer.failed_batches();
-    let queue_status = if queue_depth >= 256 { "fail" } else if queue_depth > 0 { "warn" } else { "ok" };
+    let queue_status = if queue_depth >= 256 {
+        "fail"
+    } else if queue_depth > 0 {
+        "warn"
+    } else {
+        "ok"
+    };
     let drops_status = if dropped_batches > 0 { "warn" } else { "ok" };
     let failures_status = if failed_batches > 0 { "warn" } else { "ok" };
-    let index_status = if stats.indexed_files > 0 { "ok" } else { "warn" };
+    let index_status = if stats.indexed_files > 0 {
+        "ok"
+    } else {
+        "warn"
+    };
     let checks = vec![
         json!({
             "name": "protocol_version",
@@ -844,7 +886,10 @@ fn json_health(ctx: &RpcContext, stats: &StoreStats) -> Value {
         .iter()
         .filter_map(|check| {
             if check.get("status").and_then(Value::as_str) == Some("warn") {
-                check.get("message").and_then(Value::as_str).map(str::to_string)
+                check
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
             } else {
                 None
             }
@@ -869,6 +914,7 @@ fn json_health(ctx: &RpcContext, stats: &StoreStats) -> Value {
         "failedBatches": failed_batches,
         "indexedFiles": stats.indexed_files,
         "findingsCacheEntries": stats.findings_cache_entries,
+        "metrics": ctx.indexer.telemetry_snapshot(),
         "warnings": warnings,
         "checks": checks,
     })
@@ -908,6 +954,8 @@ fn json_impact_cone(summary: ImpactConeSummary) -> Value {
         "path": summary.path,
         "depth": summary.depth,
         "files": summary.files,
+        "truncated": summary.truncated,
+        "omittedCount": summary.omitted_count,
         "indexedAtUnixMs": summary.indexed_at_ms,
     })
 }
@@ -928,6 +976,8 @@ fn json_change_risk(summary: ChangeRiskSummary) -> Value {
             "findingIds": reason.finding_ids,
         })).collect::<Vec<_>>(),
         "impactedFiles": summary.impacted_files,
+        "impactedFilesTruncated": summary.impacted_files_truncated,
+        "omittedImpactedFiles": summary.omitted_impacted_files,
         "focus": summary.focus.into_iter().map(|item| json!({
             "target": item.target,
             "targetKind": item.target_kind,
@@ -1157,6 +1207,7 @@ mod tests {
     use crate::{
         config::ProjectConfig,
         indexer::Indexer,
+        metrics::Metrics,
         model::{Evidence, Finding, Severity},
         session_conflicts::SessionConflictTracker,
         store::Store,
@@ -1215,6 +1266,37 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn dispatch_redacts_invalid_params_details() {
+        let ctx = test_context("invalid-params", None);
+        let response = dispatch(
+            &ctx,
+            RequestEnvelope {
+                jsonrpc: "2.0".into(),
+                protocol_version: ctx.protocol_version,
+                id: Some("request-invalid".into()),
+                auth_token: None,
+                method: "analysis.check".into(),
+                params: json!({
+                    "projectRoot": ctx.project_root,
+                    "maxFindings": "not-a-number",
+                    "secret": "do-not-echo"
+                }),
+            },
+        )
+        .await;
+
+        let error = response.error.expect("error response");
+        let details = error.details.expect("details");
+        assert_eq!(error.code, "invalid_params");
+        assert_eq!(
+            details["paramKeys"],
+            json!(["maxFindings", "projectRoot", "secret"])
+        );
+        assert!(details.get("params").is_none());
+        assert!(!details.to_string().contains("do-not-echo"));
+    }
+
     #[test]
     fn files_changed_params_accept_opencode_session_id_casing() {
         let params = deserialize_params::<FilesChangedParams>(
@@ -1236,9 +1318,15 @@ mod tests {
 
         assert_eq!(params.session_id, "session-a");
         assert_eq!(params.turn_id.as_deref(), Some("turn-7"));
-        assert_eq!(params.correlation.workspace_id.as_deref(), Some("workspace-a"));
+        assert_eq!(
+            params.correlation.workspace_id.as_deref(),
+            Some("workspace-a")
+        );
         assert_eq!(params.correlation.correlation_id.as_deref(), Some("corr-a"));
-        assert_eq!(params.correlation.tool_call_id.as_deref(), Some("tool-call-a"));
+        assert_eq!(
+            params.correlation.tool_call_id.as_deref(),
+            Some("tool-call-a")
+        );
     }
 
     #[test]
@@ -1249,6 +1337,7 @@ mod tests {
                 "paths": ["src/index.ts"],
                 "depth": 2,
                 "maxFindings": 25,
+                "maxFiles": 12,
                 "sessionID": "session-a",
                 "plan_id": "plan-a",
                 "wave_id": "W5",
@@ -1262,10 +1351,17 @@ mod tests {
 
         assert_eq!(params.session_id.as_deref(), Some("session-a"));
         assert_eq!(params.paths, vec!["src/index.ts"]);
+        assert_eq!(params.max_files, Some(12));
         assert_eq!(params.correlation.plan_id.as_deref(), Some("plan-a"));
         assert_eq!(params.correlation.wave_id.as_deref(), Some("W5"));
-        assert_eq!(params.correlation.agent_run_id.as_deref(), Some("agent-run-a"));
-        assert_eq!(params.correlation.artifact_ref.as_deref(), Some("artifact-a"));
+        assert_eq!(
+            params.correlation.agent_run_id.as_deref(),
+            Some("agent-run-a")
+        );
+        assert_eq!(
+            params.correlation.artifact_ref.as_deref(),
+            Some("artifact-a")
+        );
     }
 
     #[test]
@@ -1310,19 +1406,26 @@ mod tests {
             1,
         )
         .expect("deserialize drift map params");
-        assert_fleet_correlation(serde_json::to_value(drift_map).expect("serialize drift map params"));
+        assert_fleet_correlation(
+            serde_json::to_value(drift_map).expect("serialize drift map params"),
+        );
 
         let conflicts = deserialize_params::<ConflictsParams>(
-            &merge_json(json!({ "projectRoot": "/tmp/project" }), base_correlation.clone()),
+            &merge_json(
+                json!({ "projectRoot": "/tmp/project" }),
+                base_correlation.clone(),
+            ),
             None,
             1,
         )
         .expect("deserialize conflicts params");
-        assert_fleet_correlation(serde_json::to_value(conflicts).expect("serialize conflicts params"));
+        assert_fleet_correlation(
+            serde_json::to_value(conflicts).expect("serialize conflicts params"),
+        );
 
         let impact_cone = deserialize_params::<ImpactConeParams>(
             &merge_json(
-                json!({ "projectRoot": "/tmp/project", "path": "src/index.ts", "depth": 2 }),
+                json!({ "projectRoot": "/tmp/project", "path": "src/index.ts", "depth": 2, "maxFiles": 10 }),
                 base_correlation.clone(),
             ),
             None,
@@ -1335,7 +1438,7 @@ mod tests {
 
         let api_surface = deserialize_params::<ApiSurfaceParams>(
             &merge_json(
-                json!({ "projectRoot": "/tmp/project", "maxExports": 25 }),
+                json!({ "projectRoot": "/tmp/project", "path": "src/public.ts", "maxExports": 25 }),
                 base_correlation.clone(),
             ),
             None,
@@ -1417,6 +1520,7 @@ mod tests {
         fs::create_dir_all(&state_dir).expect("create state dir");
 
         let config = Arc::new(ProjectConfig::default());
+        let metrics = Metrics::new();
         let store = Arc::new(Store::open(&state_dir).expect("open store"));
         let sessions = Arc::new(SessionConflictTracker::new(
             config.thresholds.session_conflict_decay_ms,
@@ -1428,6 +1532,7 @@ mod tests {
             Arc::clone(&config),
             Arc::clone(&store),
             sessions,
+            Arc::clone(&metrics),
         )
         .expect("create indexer");
 

@@ -157,10 +157,11 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         paths: z.array(z.string()).min(1),
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
+        maxFiles: z.number().int().min(1).max(200).default(50),
         ...fleetCorrelationArgs,
       },
       async execute(
-        args: { paths: string[]; depth?: number; maxFindings?: number } & FleetCorrelationArgs,
+        args: { paths: string[]; depth?: number; maxFindings?: number; maxFiles?: number } & FleetCorrelationArgs,
         context,
       ) {
         setToolMetadata(context, { title: "codemem change risk" });
@@ -173,6 +174,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             paths: args.paths,
             depth: args.depth ?? 2,
             maxFindings: args.maxFindings ?? config.config.maxFindings,
+            maxFiles: args.maxFiles ?? 50,
             ...fleetCorrelationFromArgs(args),
           });
           return {
@@ -192,10 +194,11 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         paths: z.array(z.string()).min(1),
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
+        maxFiles: z.number().int().min(1).max(200).default(50),
         ...fleetCorrelationArgs,
       },
       async execute(
-        args: { paths: string[]; depth?: number; maxFindings?: number } & FleetCorrelationArgs,
+        args: { paths: string[]; depth?: number; maxFindings?: number; maxFiles?: number } & FleetCorrelationArgs,
         context,
       ) {
         setToolMetadata(context, { title: "codemem before edit" });
@@ -208,6 +211,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             paths: args.paths,
             depth: args.depth ?? 2,
             maxFindings: args.maxFindings ?? config.config.maxFindings,
+            maxFiles: args.maxFiles ?? 50,
             ...fleetCorrelationFromArgs(args),
           });
           return {
@@ -218,6 +222,9 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
               paths: response.paths,
               reasons: response.reasons,
               focus: response.focus,
+              impactedFiles: response.impactedFiles,
+              impactedFilesTruncated: response.impactedFilesTruncated,
+              omittedImpactedFiles: response.omittedImpactedFiles,
               stats: response.stats,
               indexedAtUnixMs: response.indexedAtUnixMs,
             }),
@@ -237,6 +244,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
         depth: z.number().int().min(1).max(8).default(2),
         maxFindings: z.number().int().min(1).max(200).default(50),
         maxItems: z.number().int().min(1).max(50).default(10),
+        maxFiles: z.number().int().min(1).max(200).default(50),
         ...fleetCorrelationArgs,
       },
       async execute(
@@ -245,6 +253,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
           depth?: number;
           maxFindings?: number;
           maxItems?: number;
+          maxFiles?: number;
         } & FleetCorrelationArgs,
         context,
       ) {
@@ -258,6 +267,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             paths: args.paths,
             depth: args.depth ?? 2,
             maxFindings: args.maxFindings ?? config.config.maxFindings,
+            maxFiles: args.maxFiles ?? 50,
             ...fleetCorrelationFromArgs(args),
           });
           const maxItems = args.maxItems ?? 10;
@@ -294,6 +304,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
           const client = await runtime.ensureReady({ waitForReady: true });
           const response = await client.apiSurface({
             projectRoot: runtime.projectRoot,
+            path: args.path,
             maxExports: args.maxExports ?? 100,
             ...fleetCorrelationFromArgs(args),
           });
@@ -312,9 +323,13 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
       args: {
         path: z.string(),
         depth: z.number().int().min(1).max(8).default(2),
+        maxFiles: z.number().int().min(1).max(200).default(50),
         ...fleetCorrelationArgs,
       },
-      async execute(args: { path: string; depth?: number } & FleetCorrelationArgs, context) {
+      async execute(
+        args: { path: string; depth?: number; maxFiles?: number } & FleetCorrelationArgs,
+        context,
+      ) {
         setToolMetadata(context, { title: "codemem impact cone" });
         try {
           const client = await runtime.ensureReady({ waitForReady: true });
@@ -322,6 +337,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
             projectRoot: runtime.projectRoot,
             path: args.path,
             depth: args.depth ?? 2,
+            maxFiles: args.maxFiles ?? 50,
             ...fleetCorrelationFromArgs(args),
           });
           return {
@@ -388,7 +404,7 @@ export function createCodeMemTools(runtime: CodeMemToolRuntime): Record<string, 
           const check = await client.check({
             projectRoot: runtime.projectRoot,
             sessionID: context.sessionID,
-            paths: [],
+            paths: undefined,
             maxFindings,
             includeEvidence: true,
             waitForFreshIndex: true,

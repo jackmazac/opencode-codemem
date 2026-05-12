@@ -2,6 +2,7 @@ use crate::{
     config::{PackageBoundary, ProjectConfig, normalize_rel},
     detectors::{clones::CloneDetector, types::TypeShapeDetector},
     graph::ModuleGraph,
+    metrics::Metrics,
     model::{
         DriftMap, Evidence, FileDocument, Finding, ImportEdge, PublicApiSymbol, Severity,
         StoreStats,
@@ -57,6 +58,8 @@ pub struct ImpactConeSummary {
     pub path: String,
     pub depth: usize,
     pub files: Vec<String>,
+    pub truncated: bool,
+    pub omitted_count: usize,
     pub indexed_at_ms: i64,
 }
 
@@ -68,6 +71,8 @@ pub struct ChangeRiskSummary {
     pub depth: usize,
     pub reasons: Vec<ChangeRiskReason>,
     pub impacted_files: Vec<String>,
+    pub impacted_files_truncated: bool,
+    pub omitted_impacted_files: usize,
     pub focus: Vec<ChangeRiskFocusItem>,
     pub indexed_at_ms: i64,
     pub stats: ChangeRiskStats,
@@ -166,6 +171,7 @@ pub struct Indexer {
     ignore: GlobSet,
     store: Arc<Store>,
     sessions: Arc<SessionConflictTracker>,
+    metrics: Arc<Metrics>,
     clone_detector: CloneDetector,
     type_shape_detector: TypeShapeDetector,
     queue_depth: AtomicUsize,
@@ -183,6 +189,7 @@ impl Indexer {
         config: Arc<ProjectConfig>,
         store: Arc<Store>,
         sessions: Arc<SessionConflictTracker>,
+        metrics: Arc<Metrics>,
     ) -> Result<Arc<Self>> {
         let ignore = config.ignore_set()?;
         let (worker_tx, worker_rx) = mpsc::channel(256);
@@ -192,6 +199,7 @@ impl Indexer {
             ignore,
             store,
             sessions,
+            metrics,
             clone_detector: CloneDetector::new(&config),
             type_shape_detector: TypeShapeDetector::new(&config),
             queue_depth: AtomicUsize::new(0),
@@ -208,6 +216,7 @@ impl Indexer {
             let this = Arc::clone(self);
             tokio::spawn(async move {
                 while let Some(item) = rx.recv().await {
+                    let started = Instant::now();
                     let _ = this.store.upsert_correlation_metadata(
                         "index_batch",
                         &format!("{}:{}", item.session_id, item.reason),
@@ -217,9 +226,12 @@ impl Indexer {
                         .index_paths_now(&item.session_id, item.files.clone(), &item.reason)
                         .await;
                     if result.is_err() {
-                        this.failed_batches.fetch_add(1, Ordering::SeqCst);
+                        let failed = this.failed_batches.fetch_add(1, Ordering::SeqCst) + 1;
+                        this.metrics.set_queue_failed(failed);
                     }
-                    this.queue_depth.fetch_sub(1, Ordering::SeqCst);
+                    let depth = this.decrement_queue_depth();
+                    this.metrics.set_queue_depth(depth);
+                    this.metrics.record_duration("index.worker.batch", started);
                 }
             });
         }
@@ -243,8 +255,33 @@ impl Indexer {
         self.indexed_at_ms.load(Ordering::SeqCst)
     }
 
+    fn decrement_queue_depth(&self) -> usize {
+        let mut current = self.queue_depth.load(Ordering::SeqCst);
+        loop {
+            if current == 0 {
+                return 0;
+            }
+            match self.queue_depth.compare_exchange(
+                current,
+                current - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return current - 1,
+                Err(next) => current = next,
+            }
+        }
+    }
+
     pub fn store_stats(&self) -> Result<StoreStats> {
-        self.store.stats()
+        let started = Instant::now();
+        let result = self.store.stats();
+        self.metrics.record_duration("store.stats", started);
+        result
+    }
+
+    pub fn telemetry_snapshot(&self) -> crate::metrics::TelemetrySnapshot {
+        self.metrics.snapshot()
     }
 
     pub fn record_correlation_metadata(
@@ -263,30 +300,46 @@ impl Indexer {
         files: Vec<String>,
         reason: String,
         correlation: FleetCorrelation,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let started = Instant::now();
         let files = self.normalize_candidates(files);
         if files.is_empty() {
-            return Ok(());
+            self.metrics.record_duration("index.enqueue", started);
+            return Ok(false);
         }
         self.store
             .upsert_correlation_metadata("session", &session_id, &correlation)?;
-        match self.worker_tx.try_send(IndexWorkItem {
-                session_id,
-                files,
-                reason,
-                correlation,
-            }) {
+        let accepted = match self.worker_tx.try_send(IndexWorkItem {
+            session_id,
+            files,
+            reason,
+            correlation,
+        }) {
             Ok(()) => {
-                self.queue_depth.fetch_add(1, Ordering::SeqCst);
+                let depth = self.queue_depth.fetch_add(1, Ordering::SeqCst) + 1;
+                self.metrics.set_queue_depth(depth);
+                true
             }
-            Err(TrySendError::Full(_)) => {
-                self.dropped_batches.fetch_add(1, Ordering::SeqCst);
+            Err(TrySendError::Full(item)) => {
+                let dropped = self.dropped_batches.fetch_add(1, Ordering::SeqCst) + 1;
+                self.metrics.increment_queue_drops();
+                self.metrics.set_queue_drops(dropped);
+                let _ = self.store.append_event(
+                    "index.queue_dropped",
+                    &serde_json::json!({
+                        "sessionID": item.session_id,
+                        "reason": item.reason,
+                        "droppedBatches": dropped,
+                    }),
+                );
+                false
             }
             Err(TrySendError::Closed(_)) => {
                 return Err(anyhow::anyhow!("index queue is closed"));
             }
-        }
-        Ok(())
+        };
+        self.metrics.record_duration("index.enqueue", started);
+        Ok(accepted)
     }
 
     pub async fn bootstrap_scan(&self) -> Result<()> {
@@ -317,7 +370,7 @@ impl Indexer {
 
         let findings =
             self.collect_findings(normalized_paths.as_ref(), session_id, max_findings)?;
-        let stats = self.store.stats()?;
+        let stats = self.store_stats()?;
         let truncated = findings.len() > max_findings;
         let output = if truncated {
             findings.into_iter().take(max_findings).collect()
@@ -325,6 +378,7 @@ impl Indexer {
             findings
         };
         self.store.cache_findings("latest_check", &output)?;
+        self.metrics.record_duration("analysis.check", started);
         Ok(CheckSummary {
             findings: output,
             truncated,
@@ -339,11 +393,13 @@ impl Indexer {
         session_id: Option<&str>,
         max_findings: usize,
     ) -> Result<DriftMapSummary> {
+        let started = Instant::now();
         let check = self.check(session_id, None, max_findings, false).await?;
-        let graph = ModuleGraph::load(&self.project_root, &self.config, &self.store)?;
+        let graph = self.load_graph()?;
         let map = graph
             .drift_map(check.findings.clone())
             .finish(check.findings);
+        self.metrics.record_duration("analysis.driftMap", started);
         Ok(DriftMapSummary {
             map,
             indexed_at_ms: self.indexed_at_ms(),
@@ -355,7 +411,9 @@ impl Indexer {
         session_id: Option<&str>,
         max_findings: usize,
     ) -> Result<ConflictSummary> {
+        let started = Instant::now();
         if !self.config.layers.session_conflicts {
+            self.metrics.record_duration("analysis.conflicts", started);
             return Ok(ConflictSummary {
                 findings: Vec::new(),
                 indexed_at_ms: self.indexed_at_ms(),
@@ -367,28 +425,44 @@ impl Indexer {
             self.config.thresholds.session_conflict_overlap,
             max_findings,
         );
+        self.metrics.record_duration("analysis.conflicts", started);
         Ok(ConflictSummary {
             findings,
             indexed_at_ms: self.indexed_at_ms(),
         })
     }
 
-    pub fn impact_cone(&self, path: &str, depth: usize) -> Result<ImpactConeSummary> {
+    pub fn impact_cone(
+        &self,
+        path: &str,
+        depth: usize,
+        max_files: usize,
+    ) -> Result<ImpactConeSummary> {
+        let started = Instant::now();
         let Some(normalized_path) = self.normalize_candidate_file(path) else {
             bail!("impact-cone path is outside project root or ignored: {path}");
         };
-        let graph = ModuleGraph::load(&self.project_root, &self.config, &self.store)?;
-        let files: Vec<String> = graph
+        let graph = self.load_graph()?;
+        let mut files: Vec<String> = graph
             .dependency_cone(std::slice::from_ref(&normalized_path), depth)
             .into_iter()
             .collect();
         if files.is_empty() {
             bail!("impact-cone path is not indexed: {normalized_path}");
         }
+        let omitted_count = files.len().saturating_sub(max_files);
+        let truncated = omitted_count > 0;
+        if truncated {
+            files.truncate(max_files);
+            self.metrics.record_truncation(omitted_count);
+        }
+        self.metrics.record_duration("analysis.impactCone", started);
         Ok(ImpactConeSummary {
             path: normalized_path,
             depth,
             files,
+            truncated,
+            omitted_count,
             indexed_at_ms: self.indexed_at_ms(),
         })
     }
@@ -399,30 +473,44 @@ impl Indexer {
         depth: usize,
         session_id: Option<&str>,
         max_findings: usize,
+        max_files: usize,
     ) -> Result<ChangeRiskSummary> {
+        let started = Instant::now();
         let paths = self.normalize_candidates(paths);
-        let graph = ModuleGraph::load(&self.project_root, &self.config, &self.store)?;
-        let impacted_files = graph
+        let graph = self.load_graph()?;
+        let all_impacted_files = graph
             .dependency_cone(&paths, depth)
             .into_iter()
             .collect::<Vec<_>>();
-        let impacted_set = impacted_files.iter().cloned().collect::<BTreeSet<_>>();
+        let impacted_set = all_impacted_files.iter().cloned().collect::<BTreeSet<_>>();
+        let omitted_impacted_files = all_impacted_files.len().saturating_sub(max_files);
+        let impacted_files_truncated = omitted_impacted_files > 0;
+        let impacted_files = if impacted_files_truncated {
+            self.metrics.record_truncation(omitted_impacted_files);
+            all_impacted_files
+                .iter()
+                .take(max_files)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            all_impacted_files.clone()
+        };
         let mut reasons = Vec::new();
 
-        if impacted_files.len() > paths.len() {
+        if all_impacted_files.len() > paths.len() {
             reasons.push(ChangeRiskReason {
                 kind: "dependency_cone".into(),
-                severity: if impacted_files.len() >= 8 {
+                severity: if all_impacted_files.len() >= 8 {
                     Severity::Warn
                 } else {
                     Severity::Info
                 },
-                score: ((impacted_files.len() as u32) * 4).min(30),
+                score: ((all_impacted_files.len() as u32) * 4).min(30),
                 detail: format!(
                     "{} files are in the depth-{depth} import-graph dependency cone",
-                    impacted_files.len()
+                    all_impacted_files.len()
                 ),
-                files: impacted_files.iter().take(12).cloned().collect(),
+                files: all_impacted_files.iter().take(12).cloned().collect(),
                 symbols: Vec::new(),
                 finding_ids: Vec::new(),
             });
@@ -450,9 +538,8 @@ impl Indexer {
 
         let public_exports = self
             .store
-            .load_public_exports()?
+            .load_public_exports_for_paths(&paths)?
             .into_iter()
-            .filter(|export| paths.iter().any(|path| path == &export.source_file))
             .collect::<Vec<_>>();
         if !public_exports.is_empty() {
             reasons.push(ChangeRiskReason {
@@ -477,7 +564,7 @@ impl Indexer {
             });
         }
 
-        let dynamic_import_files = impacted_files
+        let dynamic_import_files = all_impacted_files
             .iter()
             .filter(|file| graph.dynamic_import_risk_for(file))
             .cloned()
@@ -497,7 +584,8 @@ impl Indexer {
             });
         }
 
-        let findings = self.collect_findings(Some(&impacted_files), session_id, max_findings)?;
+        let findings =
+            self.collect_findings(Some(&all_impacted_files), session_id, max_findings)?;
         let api_drift = findings_by_kind(&findings, "api_drift");
         if !api_drift.is_empty() {
             reasons.push(ChangeRiskReason {
@@ -593,6 +681,7 @@ impl Indexer {
             .sum::<u32>()
             .min(100);
         let focus = focus_from_reasons(&reasons, max_findings.min(12));
+        self.metrics.record_duration("analysis.changeRisk", started);
         Ok(ChangeRiskSummary {
             score,
             level: risk_level(score).into(),
@@ -600,6 +689,8 @@ impl Indexer {
             depth,
             reasons,
             impacted_files,
+            impacted_files_truncated,
+            omitted_impacted_files,
             focus,
             indexed_at_ms: self.indexed_at_ms(),
             stats: ChangeRiskStats {
@@ -612,11 +703,31 @@ impl Indexer {
         })
     }
 
+    #[cfg(test)]
     pub fn api_surface(&self, max_exports: usize) -> Result<ApiSurfaceSummary> {
+        self.api_surface_for_path(None, max_exports)
+    }
+
+    pub fn api_surface_for_path(
+        &self,
+        path: Option<String>,
+        max_exports: usize,
+    ) -> Result<ApiSurfaceSummary> {
+        let started = Instant::now();
         let limit = max_exports.max(1);
-        let total = self.store.count_public_exports()?;
-        let exports = self.store.load_public_exports_limited(limit)?;
+        let normalized_path = path.and_then(|path| self.normalize_candidate_file(&path));
+        let total = self
+            .store
+            .count_public_exports_for_path(normalized_path.as_deref())?;
+        let exports = self
+            .store
+            .load_public_exports_limited_for_path(limit, normalized_path.as_deref())?;
         let truncated = total > exports.len();
+        if truncated {
+            self.metrics
+                .record_truncation(total.saturating_sub(exports.len()));
+        }
+        self.metrics.record_duration("analysis.apiSurface", started);
         Ok(ApiSurfaceSummary {
             exports,
             total,
@@ -626,7 +737,7 @@ impl Indexer {
     }
 
     pub fn layer_boundaries(&self, max_findings: usize) -> Result<LayerBoundarySummary> {
-        let graph = ModuleGraph::load(&self.project_root, &self.config, &self.store)?;
+        let graph = self.load_graph()?;
         let cycles = graph.package_cycle_findings(max_findings);
         Ok(LayerBoundarySummary {
             boundaries: self.config.package_boundaries.clone(),
@@ -706,22 +817,26 @@ impl Indexer {
         let lease_owner = maintenance_owner("maintain");
         if prune_logs || compact {
             self.acquire_maintenance_lease("maintain", &lease_owner)?;
-        }
-        if prune_logs {
-            for detail in self.store.prune(self.config.telemetry.retain_days)? {
-                actions.push(MaintainAction {
-                    kind: "applied".into(),
-                    detail,
-                    estimated_bytes: None,
-                });
-            }
-        }
-        if compact {
-            self.store.vacuum()?;
-        }
-        if prune_logs || compact {
-            self.store
-                .release_maintenance_lease("maintain", &lease_owner)?;
+            let result = (|| {
+                if prune_logs {
+                    for detail in self.store.prune(self.config.telemetry.retain_days)? {
+                        actions.push(MaintainAction {
+                            kind: "applied".into(),
+                            detail,
+                            estimated_bytes: None,
+                        });
+                    }
+                }
+                if compact {
+                    self.store.vacuum()?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })();
+            let release = self
+                .store
+                .release_maintenance_lease("maintain", &lease_owner);
+            result?;
+            release?;
         }
         Ok(MaintainSummary {
             actions,
@@ -744,11 +859,17 @@ impl Indexer {
         }
         let lease_owner = maintenance_owner("rebuild");
         self.acquire_maintenance_lease("rebuild", &lease_owner)?;
-        self.store.clear_index()?;
-        self.indexed_at_ms.store(0, Ordering::SeqCst);
-        self.bootstrap_scan().await?;
-        self.store
-            .release_maintenance_lease("rebuild", &lease_owner)?;
+        let result = async {
+            self.store.clear_index()?;
+            self.indexed_at_ms.store(0, Ordering::SeqCst);
+            self.bootstrap_scan().await
+        }
+        .await;
+        let release = self
+            .store
+            .release_maintenance_lease("rebuild", &lease_owner);
+        result?;
+        release?;
         Ok(RebuildSummary {
             would_rebuild: true,
             reason,
@@ -757,13 +878,20 @@ impl Indexer {
 
     fn acquire_maintenance_lease(&self, name: &str, owner: &str) -> Result<()> {
         let now = chrono::Utc::now().timestamp_millis();
-        let acquired = self
-            .store
-            .try_acquire_maintenance_lease(name, owner, now + 5 * 60 * 1_000, now)?;
+        let acquired =
+            self.store
+                .try_acquire_maintenance_lease(name, owner, now + 5 * 60 * 1_000, now)?;
         if !acquired {
             bail!("maintenance lease is already active: {name}");
         }
         Ok(())
+    }
+
+    fn load_graph(&self) -> Result<ModuleGraph> {
+        let started = Instant::now();
+        let graph = ModuleGraph::load(&self.project_root, &self.config, &self.store);
+        self.metrics.record_duration("graph.load", started);
+        graph
     }
 
     async fn index_paths_now(
@@ -772,6 +900,7 @@ impl Indexer {
         files: Vec<String>,
         reason: &str,
     ) -> Result<usize> {
+        let started = Instant::now();
         let files = self.normalize_candidates(files);
         if files.is_empty() {
             return Ok(0);
@@ -784,15 +913,18 @@ impl Indexer {
                 self.store.remove_file(&relative_path)?;
                 continue;
             }
-            let metadata = tokio::fs::metadata(&absolute_path)
+            let Some(canonical_path) = self.canonical_project_file(&absolute_path) else {
+                continue;
+            };
+            let metadata = tokio::fs::metadata(&canonical_path)
                 .await
-                .with_context(|| format!("failed to stat {}", absolute_path.display()))?;
+                .with_context(|| format!("failed to stat {}", canonical_path.display()))?;
             if !metadata.is_file() {
                 continue;
             }
-            let source = tokio::fs::read_to_string(&absolute_path)
+            let source = tokio::fs::read_to_string(&canonical_path)
                 .await
-                .with_context(|| format!("failed to read {}", absolute_path.display()))?;
+                .with_context(|| format!("failed to read {}", canonical_path.display()))?;
             let digest = hash(source.as_bytes()).to_hex().to_string();
             if self.store.file_digest(&relative_path)?.as_deref() == Some(digest.as_str()) {
                 continue;
@@ -848,11 +980,7 @@ impl Indexer {
                 || self.config.layers.dynamic_dead_code
                 || self.config.layers.session_conflicts;
             let graph = if graph_needed {
-                Some(ModuleGraph::load(
-                    &self.project_root,
-                    &self.config,
-                    &self.store,
-                )?)
+                Some(self.load_graph()?)
             } else {
                 None
             };
@@ -880,6 +1008,7 @@ impl Indexer {
             )?;
         }
 
+        self.metrics.record_duration("index.pathsNow", started);
         Ok(indexed)
     }
 
@@ -891,11 +1020,19 @@ impl Indexer {
     ) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         if self.config.layers.ast_clones || self.config.layers.simhash_clones {
-            let clone_records = self.store.load_clone_fingerprints()?;
+            let clone_records = if let Some(paths) = path_filter {
+                self.store.load_clone_fingerprints_for_paths(paths)?
+            } else {
+                self.store.load_clone_fingerprints()?
+            };
             findings.extend(self.clone_detector.detect(&clone_records, max_findings));
         }
         if self.config.layers.type_shapes {
-            let type_records = self.store.load_type_shapes()?;
+            let type_records = if let Some(paths) = path_filter {
+                self.store.load_type_shapes_for_paths(paths)?
+            } else {
+                self.store.load_type_shapes()?
+            };
             findings.extend(self.type_shape_detector.detect(&type_records, max_findings));
         }
 
@@ -904,11 +1041,7 @@ impl Indexer {
             || self.config.layers.api_drift
             || self.config.layers.session_conflicts;
         let graph = if graph_needed {
-            Some(ModuleGraph::load(
-                &self.project_root,
-                &self.config,
-                &self.store,
-            )?)
+            Some(self.load_graph()?)
         } else {
             None
         };
@@ -953,6 +1086,16 @@ impl Indexer {
         findings.dedup_by(|left, right| left.stable_key() == right.stable_key());
         findings.truncate(max_findings.saturating_mul(2));
         Ok(findings)
+    }
+
+    fn canonical_project_file(&self, path: &Path) -> Option<PathBuf> {
+        let canonical_root = fs::canonicalize(&self.project_root).ok()?;
+        let canonical = fs::canonicalize(path).ok()?;
+        if canonical.starts_with(canonical_root) {
+            Some(canonical)
+        } else {
+            None
+        }
     }
 
     fn discover_source_files(&self) -> Result<Vec<String>> {
@@ -1472,6 +1615,7 @@ mod tests {
     use super::Indexer;
     use crate::{
         config::{Layers, PackageBoundary, ProjectConfig},
+        metrics::Metrics,
         model::{CloneFingerprint, FileDocument, ImportEdge, PublicApiSymbol, TypeShapeRecord},
         protocol::FleetCorrelation,
         session_conflicts::SessionConflictTracker,
@@ -1514,6 +1658,7 @@ mod tests {
             Arc::clone(&config),
             Arc::clone(&store),
             sessions,
+            Metrics::new(),
         )
         .expect("create indexer");
 
@@ -1533,8 +1678,11 @@ mod tests {
         let state_dir = temp_dir("startup-state");
         fs::create_dir_all(project_root.join("src")).expect("create fixture src");
         fs::create_dir_all(&state_dir).expect("create state dir");
-        fs::write(project_root.join("src/index.ts"), "export const value = 1;\n")
-            .expect("write source");
+        fs::write(
+            project_root.join("src/index.ts"),
+            "export const value = 1;\n",
+        )
+        .expect("write source");
         let store = Arc::new(Store::open(&state_dir).expect("open store"));
         let config = Arc::new(ProjectConfig::default());
         let sessions = Arc::new(SessionConflictTracker::new(
@@ -1547,6 +1695,7 @@ mod tests {
             Arc::clone(&config),
             Arc::clone(&store),
             sessions,
+            Metrics::new(),
         )
         .expect("create indexer");
 
@@ -1574,9 +1723,12 @@ mod tests {
             Arc::clone(&config),
             Arc::clone(&store),
             sessions,
+            Metrics::new(),
         )
         .expect("create indexer");
 
+        let mut accepted = 0usize;
+        let mut rejected = 0usize;
         for index in 0..300 {
             let result = tokio::time::timeout(
                 Duration::from_millis(100),
@@ -1590,8 +1742,59 @@ mod tests {
             .await;
 
             assert!(result.is_ok(), "enqueue blocked at item {index}");
+            if result.expect("timeout result").expect("enqueue result") {
+                accepted += 1;
+            } else {
+                rejected += 1;
+            }
         }
         assert!(indexer.dropped_batches() > 0);
+        assert!(accepted > 0);
+        assert!(rejected > 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn indexing_skips_symlinks_that_escape_project_root() {
+        use std::os::unix::fs::symlink;
+
+        let project_root = temp_dir("symlink-project");
+        let state_dir = temp_dir("symlink-state");
+        let outside_dir = temp_dir("symlink-outside");
+        fs::create_dir_all(project_root.join("src")).expect("create fixture src");
+        fs::create_dir_all(&state_dir).expect("create state dir");
+        fs::create_dir_all(&outside_dir).expect("create outside dir");
+        fs::write(outside_dir.join("secret.ts"), "export const secret = 1;\n")
+            .expect("write outside source");
+        symlink(
+            outside_dir.join("secret.ts"),
+            project_root.join("src/secret.ts"),
+        )
+        .expect("create symlink");
+
+        let store = Arc::new(Store::open(&state_dir).expect("open store"));
+        let config = Arc::new(ProjectConfig::default());
+        let sessions = Arc::new(SessionConflictTracker::new(
+            config.thresholds.session_conflict_decay_ms,
+            Arc::clone(&store),
+        ));
+        let indexer = Indexer::new(
+            project_root,
+            state_dir,
+            Arc::clone(&config),
+            Arc::clone(&store),
+            sessions,
+            Metrics::new(),
+        )
+        .expect("create indexer");
+
+        let indexed = indexer
+            .index_paths_now("session", vec!["src/secret.ts".into()], "test")
+            .await
+            .expect("index symlink");
+
+        assert_eq!(indexed, 0);
+        assert_eq!(store.stats().expect("store stats").indexed_files, 0);
     }
 
     #[test]
@@ -1613,6 +1816,7 @@ mod tests {
             Arc::clone(&config),
             Arc::clone(&store),
             sessions,
+            Metrics::new(),
         )
         .expect("create indexer");
 
@@ -1685,6 +1889,7 @@ mod tests {
             Arc::clone(&config),
             Arc::clone(&store),
             sessions,
+            Metrics::new(),
         )
         .expect("create indexer");
 
@@ -1704,16 +1909,20 @@ mod tests {
             .into_iter()
             .map(|export| export.export_name)
             .collect::<Vec<_>>();
-        let impact = indexer.impact_cone("src/a.ts", 2).expect("impact cone");
+        let impact = indexer.impact_cone("src/a.ts", 2, 50).expect("impact cone");
         let dot_impact = indexer
-            .impact_cone("./src/a.ts", 2)
+            .impact_cone("./src/a.ts", 2, 50)
             .expect("dot impact cone");
         let absolute_impact = indexer
             .impact_cone(
                 project_root.join("src/a.ts").to_str().expect("utf8 path"),
                 2,
+                50,
             )
             .expect("absolute impact cone");
+        let truncated_impact = indexer
+            .impact_cone("src/a.ts", 2, 1)
+            .expect("truncated impact cone");
         let layers = indexer.layer_boundaries(50).expect("layer boundaries");
         let first_layer_cycle = indexer
             .layer_boundaries(1)
@@ -1724,6 +1933,9 @@ mod tests {
         assert_eq!(impact.files, vec!["src/a.ts", "src/b.ts"]);
         assert_eq!(dot_impact.files, impact.files);
         assert_eq!(absolute_impact.files, impact.files);
+        assert_eq!(truncated_impact.files, vec!["src/a.ts"]);
+        assert!(truncated_impact.truncated);
+        assert_eq!(truncated_impact.omitted_count, 1);
         assert_eq!(layers.cycles.len(), 1);
         assert_eq!(first_layer_cycle.cycles.len(), 1);
     }
@@ -1757,14 +1969,20 @@ mod tests {
             Arc::clone(&config),
             Arc::clone(&store),
             sessions,
+            Metrics::new(),
         )
         .expect("create indexer");
 
         let surface = indexer.api_surface(2).expect("api surface");
+        let scoped = indexer
+            .api_surface_for_path(Some("src/1.ts".into()), 10)
+            .expect("scoped api surface");
 
         assert_eq!(surface.exports.len(), 2);
         assert_eq!(surface.total, 3);
         assert!(surface.truncated);
+        assert_eq!(scoped.total, 1);
+        assert_eq!(scoped.exports[0].source_file, "src/1.ts");
     }
 
     #[tokio::test]
@@ -1801,6 +2019,7 @@ mod tests {
             Arc::clone(&config),
             Arc::clone(&store),
             sessions,
+            Metrics::new(),
         )
         .expect("create indexer");
 
@@ -1814,11 +2033,14 @@ mod tests {
             .expect("index fixture repo");
 
         let shared = indexer
-            .change_risk(vec!["src/a.ts".into()], 2, None, 50)
+            .change_risk(vec!["src/a.ts".into()], 2, None, 50, 50)
             .expect("shared risk");
         let isolated = indexer
-            .change_risk(vec!["src/c.ts".into()], 2, None, 50)
+            .change_risk(vec!["src/c.ts".into()], 2, None, 50, 50)
             .expect("isolated risk");
+        let bounded = indexer
+            .change_risk(vec!["src/a.ts".into()], 2, None, 50, 1)
+            .expect("bounded risk");
 
         assert!(shared.score > isolated.score);
         assert!(
@@ -1829,6 +2051,8 @@ mod tests {
         );
         assert!(shared.reasons.iter().any(|reason| reason.kind == "cycles"));
         assert!(shared.focus.iter().any(|item| item.target == "src/a.ts"));
+        assert!(bounded.impacted_files_truncated);
+        assert_eq!(bounded.omitted_impacted_files, 1);
     }
 
     fn seed_findings_fixture(store: &Store) {

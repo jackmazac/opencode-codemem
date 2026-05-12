@@ -16,6 +16,7 @@ import {
   type DriftMapRequest,
   type DriftMapResponse,
   type FilesChangedNotification,
+  type FilesChangedResponse,
   type HealthRequest,
   type HealthResponse,
   type ImpactConeRequest,
@@ -37,6 +38,7 @@ import {
   type ShutdownResponse,
   type StatusRequest,
   type StatusResponse,
+  type TelemetrySnapshot,
 } from "@codemem/shared/protocol";
 
 export type DaemonEndpoint = {
@@ -58,7 +60,7 @@ export class DaemonClient {
     return this.request("health", params, { timeoutMs: this.endpoint.connectTimeoutMs });
   }
 
-  filesChanged(params: FilesChangedNotification): Promise<{ accepted: boolean }> {
+  filesChanged(params: FilesChangedNotification): Promise<FilesChangedResponse> {
     return this.request("project.filesChanged", params, { timeoutMs: this.endpoint.requestTimeoutMs });
   }
 
@@ -192,7 +194,8 @@ async function readResponse(
   requestID: string,
   timeoutMs: number,
 ): Promise<RpcResponseEnvelope> {
-  let buffer = Buffer.alloc(0);
+  const chunks: Buffer[] = [];
+  let bufferedBytes = 0;
 
   const timeout = createTimeout(timeoutMs, () => {
     socket.destroy(new Error(`codemem request timeout after ${timeoutMs}ms`));
@@ -201,9 +204,15 @@ async function readResponse(
   try {
     const responsePromise = new Promise<RpcResponseEnvelope>((resolve, reject) => {
       socket.on("data", (chunk: Buffer) => {
-        buffer = Buffer.concat([buffer, chunk]);
+        chunks.push(chunk);
+        bufferedBytes += chunk.length;
+        const buffer = chunks.length === 1 && chunks[0] ? chunks[0] : Buffer.concat(chunks);
         const decoded = decodeFrames(buffer);
-        buffer = decoded.remainder;
+        chunks.length = 0;
+        bufferedBytes = decoded.remainder.length;
+        if (decoded.remainder.length > 0) {
+          chunks.push(decoded.remainder);
+        }
         for (const message of decoded.messages) {
           if (!("id" in message)) {
             continue;
@@ -249,6 +258,36 @@ function validateHealthResult(value: unknown): HealthResponse {
     findingsCacheEntries: requireNumber(
       result.findingsCacheEntries,
       "invalid health result: findingsCacheEntries",
+    ),
+    metrics: optionalTelemetrySnapshot(result.metrics),
+  };
+}
+
+function optionalTelemetrySnapshot(value: unknown): TelemetrySnapshot | undefined {
+  if (value === undefined) return undefined;
+  const snapshot = requireRecord(value, "invalid health result: metrics");
+  const operations = requireRecord(snapshot.operations, "invalid health result: metrics.operations");
+  const counters = requireRecord(snapshot.counters, "invalid health result: metrics.counters");
+  const parsedOperations: TelemetrySnapshot["operations"] = {};
+  for (const [name, rawMetric] of Object.entries(operations)) {
+    const metric = requireRecord(rawMetric, `invalid health result: metrics.operations.${name}`);
+    parsedOperations[name] = {
+      count: requireNumber(metric.count, `invalid health result: metrics.operations.${name}.count`),
+      p50Ms: requireNumber(metric.p50Ms, `invalid health result: metrics.operations.${name}.p50Ms`),
+      p95Ms: requireNumber(metric.p95Ms, `invalid health result: metrics.operations.${name}.p95Ms`),
+      maxMs: requireNumber(metric.maxMs, `invalid health result: metrics.operations.${name}.maxMs`),
+    };
+  }
+  const parsedCounters: Record<string, number> = {};
+  for (const [name, rawCounter] of Object.entries(counters)) {
+    parsedCounters[name] = requireNumber(rawCounter, `invalid health result: metrics.counters.${name}`);
+  }
+  return {
+    operations: parsedOperations,
+    counters: parsedCounters,
+    capturedAtUnixMs: requireNumber(
+      snapshot.capturedAtUnixMs,
+      "invalid health result: metrics.capturedAtUnixMs",
     ),
   };
 }

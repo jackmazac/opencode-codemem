@@ -107,6 +107,7 @@ declare module "node:net" {
 
 
 declare const Bun: {
+  stdin: { text(): Promise<string> };
   spawn(options: {
     cmd: string[];
     cwd: string;

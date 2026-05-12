@@ -193,6 +193,19 @@ export type HealthRequest = {
   projectRoot: string;
 };
 
+export type OperationMetricSummary = {
+  count: number;
+  p50Ms: number;
+  p95Ms: number;
+  maxMs: number;
+};
+
+export type TelemetrySnapshot = {
+  operations: Record<string, OperationMetricSummary>;
+  counters: Record<string, number>;
+  capturedAtUnixMs: number;
+};
+
 export type HealthResponse = {
   protocolVersion: number;
   schemaVersion: number;
@@ -205,6 +218,7 @@ export type HealthResponse = {
   failedBatches?: number;
   indexedFiles: number;
   findingsCacheEntries: number;
+  metrics?: TelemetrySnapshot;
   warnings?: string[];
   checks?: Array<{ name: string; status: "ok" | "warn" | "fail"; message: string }>;
 };
@@ -313,12 +327,15 @@ export type ImpactConeRequest = FleetCorrelation & {
   projectRoot: string;
   path: string;
   depth: number;
+  maxFiles?: number;
 };
 
 export type ImpactConeResponse = {
   path: string;
   depth: number;
   files: string[];
+  truncated?: boolean;
+  omittedCount?: number;
   indexedAtUnixMs: number;
 };
 
@@ -327,6 +344,7 @@ export type ChangeRiskRequest = FleetCorrelation & {
   paths: string[];
   depth: number;
   maxFindings: number;
+  maxFiles?: number;
   sessionID?: string;
 };
 
@@ -337,6 +355,8 @@ export type ChangeRiskResponse = {
   depth: number;
   reasons: ChangeRiskReason[];
   impactedFiles: string[];
+  impactedFilesTruncated?: boolean;
+  omittedImpactedFiles?: number;
   focus: ChangeRiskFocusItem[];
   indexedAtUnixMs: number;
   stats: {
@@ -350,6 +370,7 @@ export type ChangeRiskResponse = {
 
 export type ApiSurfaceRequest = FleetCorrelation & {
   projectRoot: string;
+  path?: string;
   maxExports: number;
 };
 
@@ -398,9 +419,16 @@ export type LockfileResponse = {
   indexedAtUnixMs: number;
 };
 
+export type FilesChangedResponse = {
+  accepted: boolean;
+  dropped: boolean;
+  droppedBatches: number;
+  queueDepth: number;
+};
+
 export type RpcMethodMap = {
   health: { params: HealthRequest; result: HealthResponse };
-  "project.filesChanged": { params: FilesChangedNotification; result: { accepted: boolean } };
+  "project.filesChanged": { params: FilesChangedNotification; result: FilesChangedResponse };
   "analysis.check": { params: CheckRequest; result: CheckResponse };
   "analysis.driftMap": { params: DriftMapRequest; result: DriftMapResponse };
   "analysis.conflicts": { params: ConflictsRequest; result: ConflictsResponse };

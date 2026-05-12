@@ -8,9 +8,14 @@ type BenchResult = {
   name: string;
   command: string[];
   duration_ms: number;
+  p50_ms: number;
+  p95_ms: number;
+  max_ms: number;
+  iterations: number;
   ok: boolean;
   exit_code: number;
   output_bytes: number;
+  output_max_bytes: number;
   rss_mb?: number;
 };
 
@@ -59,7 +64,7 @@ try {
     for (const result of results) {
       const rss = result.rss_mb === undefined ? "" : `\trss=${result.rss_mb.toFixed(1)}MB`;
       console.log(
-        `${result.ok ? "pass" : "fail"}\t${result.name}\t${result.duration_ms}ms\t${result.output_bytes} bytes${rss}`,
+        `${result.ok ? "pass" : "fail"}\t${result.name}\tp50=${result.p50_ms}ms\tp95=${result.p95_ms}ms\t${result.output_max_bytes} bytes${rss}`,
       );
     }
   }
@@ -284,35 +289,69 @@ async function runFullBenches(projectRoot: string): Promise<BenchResult[]> {
       name: "source-size",
       command: ["measure", srcIndex],
       duration_ms: 0,
+      p50_ms: 0,
+      p95_ms: 0,
+      max_ms: 0,
+      iterations: 1,
       ok: true,
       exit_code: 0,
       output_bytes: await Bun.file(srcIndex).size,
+      output_max_bytes: await Bun.file(srcIndex).size,
     });
   }
   return results;
 }
 
 function runBench(name: string, command: string[], _projectRoot: string): BenchResult {
-  const started = performance.now();
-  const result = Bun.spawnSync(command, {
-    cwd: repoRoot,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: process.env,
-  });
-  const durationMs = Math.round(performance.now() - started);
-  const stdout = new TextDecoder().decode(result.stdout).trim();
-  const stderr = new TextDecoder().decode(result.stderr).trim();
-  if (result.exitCode !== 0 && stderr) console.error(`[${name}] ${stderr}`);
+  const iterations = Number(valueArg("--iterations") ?? (quick ? "3" : "5"));
+  const durations: number[] = [];
+  let ok = true;
+  let exitCode = 0;
+  let outputBytes = 0;
+  let outputMaxBytes = 0;
+  let rssMb: number | undefined;
+  for (let index = 0; index < iterations; index += 1) {
+    const started = performance.now();
+    const result = Bun.spawnSync(command, {
+      cwd: repoRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env,
+    });
+    const durationMs = Math.round(performance.now() - started);
+    const stdout = new TextDecoder().decode(result.stdout).trim();
+    const stderr = new TextDecoder().decode(result.stderr).trim();
+    if (result.exitCode !== 0 && stderr) console.error(`[${name}] ${stderr}`);
+    durations.push(durationMs);
+    ok = ok && result.exitCode === 0;
+    exitCode = result.exitCode;
+    outputBytes = result.stdout.byteLength;
+    outputMaxBytes = Math.max(outputMaxBytes, result.stdout.byteLength);
+    rssMb = statusRssMb(stdout) ?? rssMb;
+  }
+  durations.sort((left, right) => left - right);
+  const p50Ms = percentile(durations, 0.5);
+  const p95Ms = percentile(durations, 0.95);
   return {
     name,
     command,
-    duration_ms: durationMs,
-    ok: result.exitCode === 0,
-    exit_code: result.exitCode,
-    output_bytes: result.stdout.byteLength,
-    rss_mb: statusRssMb(stdout),
+    duration_ms: p95Ms,
+    p50_ms: p50Ms,
+    p95_ms: p95Ms,
+    max_ms: durations.at(-1) ?? 0,
+    iterations,
+    ok,
+    exit_code: exitCode,
+    output_bytes: outputBytes,
+    output_max_bytes: outputMaxBytes,
+    rss_mb: rssMb,
   };
+}
+
+function percentile(sortedDurations: number[], percentileValue: number): number {
+  if (sortedDurations.length === 0) return 0;
+  const index = Math.ceil((sortedDurations.length - 1) * percentileValue);
+  return sortedDurations[Math.min(index, sortedDurations.length - 1)] ?? 0;
 }
 
 async function createSyntheticProject(): Promise<string> {
@@ -337,12 +376,29 @@ async function createSyntheticProject(): Promise<string> {
     path.join(root, "src", "index.ts"),
     [
       "import { feature } from './feature';",
+      "import { generated0 } from './generated-0';",
       "export function run(): number {",
-      "  return feature({ id: 'bench', count: 1 });",
+      "  return feature({ id: 'bench', count: 1 }) + generated0;",
       "}",
       "",
     ].join("\n"),
   );
+  for (let index = 0; index < 80; index += 1) {
+    const nextImport =
+      index < 79 ? `import { generated${index + 1} } from './generated-${index + 1}';` : "";
+    await writeFile(
+      path.join(root, "src", `generated-${index}.ts`),
+      [
+        nextImport,
+        `export type Generated${index} = { id: string; value: number; flag?: boolean };`,
+        `export const generated${index} = ${index}${index < 79 ? ` + generated${index + 1}` : ""};`,
+        `export function mapGenerated${index}(input: Generated${index}): number {`,
+        `  return input.value + generated${index};`,
+        "}",
+        "",
+      ].join("\n"),
+    );
+  }
   return root;
 }
 

@@ -1,25 +1,25 @@
+#[cfg(test)]
+use crate::model::IndexJobRecord;
 use crate::model::{
     CloneFingerprint, FileDocument, ImportEdge, PublicApiSymbol, SessionSnapshot, StoreStats,
     TypeShapeRecord,
 };
-#[cfg(test)]
-use crate::model::IndexJobRecord;
 use crate::protocol::FleetCorrelation;
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use parking_lot::{Mutex, MutexGuard};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+#[cfg(test)]
+use std::path::PathBuf;
+use std::{collections::BTreeMap, fs, path::Path, time::Duration};
 
 const CURRENT_SCHEMA_VERSION: i64 = 1;
 
 pub struct Store {
+    #[cfg(test)]
     db_path: PathBuf,
+    conn: Mutex<Connection>,
 }
 
 impl Store {
@@ -31,7 +31,12 @@ impl Store {
             )
         })?;
         let db_path = state_dir.join("codemem.sqlite3");
-        let store = Self { db_path };
+        let conn = Self::open_connection(&db_path)?;
+        let store = Self {
+            #[cfg(test)]
+            db_path: db_path.clone(),
+            conn: Mutex::new(conn),
+        };
         store.migrate_schema()?;
         Ok(store)
     }
@@ -232,6 +237,43 @@ impl Store {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    pub fn load_clone_fingerprints_for_paths(
+        &self,
+        paths: &[String],
+    ) -> Result<Vec<CloneFingerprint>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.connect()?;
+        let placeholders = repeat_placeholders(paths.len());
+        let sql = format!(
+            r#"
+            SELECT file_path, symbol, kind, start_line, end_line,
+                   normalized_hash, simhash, token_count, statement_count, tokens_json
+            FROM clone_fingerprints
+            WHERE file_path IN ({placeholders})
+            "#
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(paths.iter()), |row| {
+            let tokens_json: String = row.get(9)?;
+            let normalized_tokens = serde_json::from_str(&tokens_json).unwrap_or_default();
+            Ok(CloneFingerprint {
+                file_path: row.get(0)?,
+                symbol: row.get(1)?,
+                kind: row.get(2)?,
+                start_line: row.get::<_, i64>(3)? as u32,
+                end_line: row.get::<_, i64>(4)? as u32,
+                normalized_hash: row.get(5)?,
+                simhash: row.get::<_, i64>(6)? as u64,
+                token_count: row.get::<_, i64>(7)? as usize,
+                statement_count: row.get::<_, i64>(8)? as usize,
+                normalized_tokens,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     pub fn load_type_shapes(&self) -> Result<Vec<TypeShapeRecord>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
@@ -241,6 +283,33 @@ impl Store {
             "#,
         )?;
         let rows = stmt.query_map([], |row| {
+            Ok(TypeShapeRecord {
+                file_path: row.get(0)?,
+                symbol: row.get(1)?,
+                shape_hash: row.get(2)?,
+                fingerprint_json: row.get(3)?,
+                depth: row.get::<_, i64>(4)? as u8,
+                suppressed: row.get::<_, i64>(5)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn load_type_shapes_for_paths(&self, paths: &[String]) -> Result<Vec<TypeShapeRecord>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.connect()?;
+        let placeholders = repeat_placeholders(paths.len());
+        let sql = format!(
+            r#"
+            SELECT file_path, symbol, shape_hash, fingerprint_json, depth, suppressed
+            FROM type_shapes
+            WHERE file_path IN ({placeholders})
+            "#
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(paths.iter()), |row| {
             Ok(TypeShapeRecord {
                 file_path: row.get(0)?,
                 symbol: row.get(1)?,
@@ -275,12 +344,17 @@ impl Store {
         self.load_public_exports_limited(usize::MAX)
     }
 
-    pub fn load_public_exports_limited(&self, limit: usize) -> Result<Vec<PublicApiSymbol>> {
+    pub fn load_public_exports_for_paths(&self, paths: &[String]) -> Result<Vec<PublicApiSymbol>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
         let conn = self.connect()?;
-        let mut stmt = conn.prepare(
-            "SELECT export_name, source_file, signature FROM public_exports ORDER BY source_file, export_name LIMIT ?1",
-        )?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
+        let placeholders = repeat_placeholders(paths.len());
+        let sql = format!(
+            "SELECT export_name, source_file, signature FROM public_exports WHERE source_file IN ({placeholders}) ORDER BY source_file, export_name"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(paths.iter()), |row| {
             Ok(PublicApiSymbol {
                 export_name: row.get(0)?,
                 source_file: row.get(1)?,
@@ -290,11 +364,57 @@ impl Store {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    pub fn count_public_exports(&self) -> Result<usize> {
+    pub fn load_public_exports_limited(&self, limit: usize) -> Result<Vec<PublicApiSymbol>> {
+        self.load_public_exports_limited_for_path(limit, None)
+    }
+
+    pub fn load_public_exports_limited_for_path(
+        &self,
+        limit: usize,
+        path: Option<&str>,
+    ) -> Result<Vec<PublicApiSymbol>> {
         let conn = self.connect()?;
-        let count = conn.query_row("SELECT COUNT(*) FROM public_exports", [], |row| {
-            row.get::<_, i64>(0)
-        })?;
+        let rows = if let Some(path) = path {
+            let mut stmt = conn.prepare(
+                "SELECT export_name, source_file, signature FROM public_exports WHERE source_file = ?1 ORDER BY source_file, export_name LIMIT ?2",
+            )?;
+            stmt.query_map(params![path, limit as i64], |row| {
+                Ok(PublicApiSymbol {
+                    export_name: row.get(0)?,
+                    source_file: row.get(1)?,
+                    signature: row.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT export_name, source_file, signature FROM public_exports ORDER BY source_file, export_name LIMIT ?1",
+            )?;
+            stmt.query_map(params![limit as i64], |row| {
+                Ok(PublicApiSymbol {
+                    export_name: row.get(0)?,
+                    source_file: row.get(1)?,
+                    signature: row.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        Ok(rows)
+    }
+
+    pub fn count_public_exports_for_path(&self, path: Option<&str>) -> Result<usize> {
+        let conn = self.connect()?;
+        let count = if let Some(path) = path {
+            conn.query_row(
+                "SELECT COUNT(*) FROM public_exports WHERE source_file = ?1",
+                params![path],
+                |row| row.get::<_, i64>(0),
+            )?
+        } else {
+            conn.query_row("SELECT COUNT(*) FROM public_exports", [], |row| {
+                row.get::<_, i64>(0)
+            })?
+        };
         Ok(count as usize)
     }
 
@@ -631,10 +751,13 @@ impl Store {
         Ok(())
     }
 
-    fn connect(&self) -> Result<Connection> {
-        let conn = Connection::open(&self.db_path).with_context(|| {
-            format!("failed to open sqlite database: {}", self.db_path.display())
-        })?;
+    fn connect(&self) -> Result<MutexGuard<'_, Connection>> {
+        Ok(self.conn.lock())
+    }
+
+    fn open_connection(db_path: &Path) -> Result<Connection> {
+        let conn = Connection::open(db_path)
+            .with_context(|| format!("failed to open sqlite database: {}", db_path.display()))?;
         conn.busy_timeout(Duration::from_millis(1_500))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -785,6 +908,10 @@ fn bool_to_int(value: bool) -> i64 {
     if value { 1 } else { 0 }
 }
 
+fn repeat_placeholders(count: usize) -> String {
+    (0..count).map(|_| "?").collect::<Vec<_>>().join(",")
+}
+
 #[cfg(test)]
 mod tests {
     use super::Store;
@@ -891,10 +1018,26 @@ mod tests {
             Some(correlation)
         );
         assert!(!table_has_column(&store.db_path, "files", "correlation_id"));
-        assert!(!table_has_column(&store.db_path, "imports", "correlation_id"));
-        assert!(!table_has_column(&store.db_path, "public_exports", "correlation_id"));
-        assert!(!table_has_column(&store.db_path, "clone_fingerprints", "correlation_id"));
-        assert!(!table_has_column(&store.db_path, "type_shapes", "correlation_id"));
+        assert!(!table_has_column(
+            &store.db_path,
+            "imports",
+            "correlation_id"
+        ));
+        assert!(!table_has_column(
+            &store.db_path,
+            "public_exports",
+            "correlation_id"
+        ));
+        assert!(!table_has_column(
+            &store.db_path,
+            "clone_fingerprints",
+            "correlation_id"
+        ));
+        assert!(!table_has_column(
+            &store.db_path,
+            "type_shapes",
+            "correlation_id"
+        ));
     }
 
     #[test]

@@ -2,6 +2,7 @@ mod config;
 mod detectors;
 mod graph;
 mod indexer;
+mod metrics;
 mod model;
 mod protocol;
 mod rpc;
@@ -11,6 +12,7 @@ mod store;
 use crate::{
     config::load_project_config,
     indexer::Indexer,
+    metrics::Metrics,
     rpc::{RpcContext, serve},
     session_conflicts::SessionConflictTracker,
     store::Store,
@@ -38,6 +40,7 @@ async fn main() -> Result<()> {
     fs::create_dir_all(state_dir.join("log"))?;
 
     let config = Arc::new(load_project_config(&project_root)?);
+    let metrics = Metrics::new();
     let store = Arc::new(Store::open(&state_dir)?);
     let sessions = Arc::new(SessionConflictTracker::new(
         config.thresholds.session_conflict_decay_ms,
@@ -49,6 +52,7 @@ async fn main() -> Result<()> {
         Arc::clone(&config),
         Arc::clone(&store),
         Arc::clone(&sessions),
+        Arc::clone(&metrics),
     )?;
     indexer.start();
 

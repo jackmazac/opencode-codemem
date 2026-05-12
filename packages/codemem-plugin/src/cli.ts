@@ -58,6 +58,7 @@ export type CheckCliCommand = BaseCliCommand & {
   includeEvidence: boolean;
   maxFindings: number;
   paths: string[];
+  pathsFromStdin: boolean;
   waitForFreshIndex: boolean;
 };
 
@@ -99,22 +100,36 @@ export type BaselineWriteCliCommand = BaseCliCommand & {
 export type ImpactConeCliCommand = BaseCliCommand & {
   kind: "impact-cone";
   depth: number;
+  maxFiles: number;
   path: string;
 };
 
 export type ChangeRiskCliCommand = BaseCliCommand & {
   kind: "change-risk";
   depth: number;
+  maxFiles: number;
   maxFindings: number;
   paths: string[];
+  pathsFromStdin: boolean;
+};
+
+export type BeforeEditCliCommand = BaseCliCommand & {
+  kind: "before-edit";
+  depth: number;
+  maxFiles: number;
+  maxFindings: number;
+  paths: string[];
+  pathsFromStdin: boolean;
 };
 
 export type ReviewFocusCliCommand = BaseCliCommand & {
   kind: "review-focus";
   depth: number;
+  maxFiles: number;
   maxFindings: number;
   maxItems: number;
   paths: string[];
+  pathsFromStdin: boolean;
 };
 
 export type ChangeDeltaCliCommand = BaseCliCommand & {
@@ -126,6 +141,7 @@ export type ChangeDeltaCliCommand = BaseCliCommand & {
 export type ApiSurfaceCliCommand = BaseCliCommand & {
   kind: "api-surface";
   maxExports: number;
+  path?: string;
 };
 
 export type LayerBoundariesCliCommand = BaseCliCommand & {
@@ -171,6 +187,7 @@ export type CliCommand =
   | BaselineWriteCliCommand
   | ImpactConeCliCommand
   | ChangeRiskCliCommand
+  | BeforeEditCliCommand
   | ReviewFocusCliCommand
   | ChangeDeltaCliCommand
   | ApiSurfaceCliCommand
@@ -220,6 +237,7 @@ export type CliRuntime = {
   baselineWrite(command: BaselineWriteCliCommand): Promise<BaselineWriteResponse>;
   impactCone(command: ImpactConeCliCommand): Promise<ImpactConeResponse>;
   changeRisk(command: ChangeRiskCliCommand): Promise<ChangeRiskResponse>;
+  beforeEdit(command: BeforeEditCliCommand): Promise<ChangeRiskResponse>;
   reviewFocus(command: ReviewFocusCliCommand): Promise<ChangeRiskResponse>;
   changeDelta(command: ChangeDeltaCliCommand): Promise<BaselineDiffResponse>;
   apiSurface(command: ApiSurfaceCliCommand): Promise<ApiSurfaceResponse>;
@@ -234,9 +252,11 @@ export type CliRunOptions = {
   runtime?: CliRuntime;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+  stdin?: () => Promise<string>;
 };
 
 const DEFAULT_MAX_FINDINGS = 50;
+const DEFAULT_MAX_FILES = 50;
 
 export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
   const [commandName, ...rest] = argv;
@@ -246,6 +266,10 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
 
   if (commandName === "baseline") {
     return parseBaselineCommand(rest, cwd);
+  }
+
+  if (rest.includes("--help") || rest.includes("-h")) {
+    return { ok: false, exitCode: 0, message: commandHelp(commandName) };
   }
 
   const parsedOptions = parseOptions(rest, cwd);
@@ -301,6 +325,7 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
           json: options.json,
           maxFindings: options.maxFindings,
           paths: options.paths,
+          pathsFromStdin: options.pathsFromStdin,
           projectRoot: options.projectRoot,
           waitForFreshIndex: options.waitForFreshIndex,
         },
@@ -356,6 +381,7 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
           kind: "impact-cone",
           depth: options.depth,
           json: options.json,
+          maxFiles: options.maxFiles,
           path: path.value,
           projectRoot: options.projectRoot,
         },
@@ -370,8 +396,27 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
           kind: "change-risk",
           depth: options.depth,
           json: options.json,
+          maxFiles: options.maxFiles,
           maxFindings: options.maxFindings,
           paths: paths.value,
+          pathsFromStdin: options.pathsFromStdin,
+          projectRoot: options.projectRoot,
+        },
+      };
+    }
+    case "before-edit": {
+      const paths = requiredPaths(options, "before-edit");
+      if (!paths.ok) return paths;
+      return {
+        ok: true,
+        command: {
+          kind: "before-edit",
+          depth: options.depth,
+          json: options.json,
+          maxFiles: options.maxFiles,
+          maxFindings: options.maxFindings,
+          paths: paths.value,
+          pathsFromStdin: options.pathsFromStdin,
           projectRoot: options.projectRoot,
         },
       };
@@ -385,9 +430,11 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
           kind: "review-focus",
           depth: options.depth,
           json: options.json,
+          maxFiles: options.maxFiles,
           maxFindings: options.maxFindings,
           maxItems: options.maxItems,
           paths: paths.value,
+          pathsFromStdin: options.pathsFromStdin,
           projectRoot: options.projectRoot,
         },
       };
@@ -410,6 +457,7 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
           kind: "api-surface",
           json: options.json,
           maxExports: options.maxExports,
+          path: options.paths[0],
           projectRoot: options.projectRoot,
         },
       };
@@ -479,7 +527,7 @@ export function parseCliArgs(argv: string[], cwd: string): CliParseResult {
       return {
         ok: false,
         exitCode: 2,
-        message: `Unknown codemem command: ${commandName}\n\n${rootHelp()}`,
+        message: `Unknown codemem command: ${commandName}\n\nExample: codemem check --path src/index.ts --json`,
       };
   }
 }
@@ -491,28 +539,32 @@ export async function runCodeMemCli(
   const stdout = options.stdout ?? ((line: string) => console.log(line));
   const stderr = options.stderr ?? ((line: string) => console.error(line));
   const cwd = options.cwd ?? process.cwd();
+  const started = Date.now();
   const parsed = parseCliArgs(argv, cwd);
 
   if (!parsed.ok) {
     const write = parsed.exitCode === 0 ? stdout : stderr;
-    write(parsed.message);
+    write(wantsJson(argv) && parsed.exitCode !== 0 ? formatCliErrorJson(parsed, argv, started) : parsed.message);
     return parsed.exitCode;
   }
 
   try {
-    if (!options.runtime && parsed.command.kind === "stop") {
-      stdout(formatStop(await runStopCommand(parsed.command)));
+    const command = await hydrateStdinPaths(parsed.command, options.stdin);
+    if (!options.runtime && command.kind === "stop") {
+      const result = await runStopCommand(command);
+      stdout(command.json ? JSON.stringify(result, null, 2) : formatStop(result));
       return 0;
     }
-    if (!options.runtime && parsed.command.kind === "cleanup") {
-      stdout(formatCleanup(await runCleanupCommand(parsed.command)));
+    if (!options.runtime && command.kind === "cleanup") {
+      const result = await runCleanupCommand(command);
+      stdout(command.json ? JSON.stringify(result, null, 2) : formatCleanup(result));
       return 0;
     }
-    const runtime = options.runtime ?? (await createDaemonRuntime(parsed.command.projectRoot));
-    stdout(await executeAndFormat(parsed.command, runtime));
+    const runtime = options.runtime ?? (await createDaemonRuntime(command.projectRoot));
+    stdout(await executeAndFormat(command, runtime));
     return 0;
   } catch (error) {
-    stderr(formatError(error));
+    stderr(wantsJson(argv) ? formatRuntimeErrorJson(error, argv, started) : formatError(error));
     return 1;
   }
 }
@@ -609,6 +661,7 @@ async function createDaemonRuntime(projectRoot: string): Promise<CliRuntime> {
         projectRoot: command.projectRoot,
         path: command.path,
         depth: command.depth,
+        maxFiles: command.maxFiles,
       }),
     changeRisk: (command) =>
       client.changeRisk({
@@ -616,6 +669,15 @@ async function createDaemonRuntime(projectRoot: string): Promise<CliRuntime> {
         paths: command.paths,
         depth: command.depth,
         maxFindings: command.maxFindings,
+        maxFiles: command.maxFiles,
+      }),
+    beforeEdit: (command) =>
+      client.changeRisk({
+        projectRoot: command.projectRoot,
+        paths: command.paths,
+        depth: command.depth,
+        maxFindings: command.maxFindings,
+        maxFiles: command.maxFiles,
       }),
     reviewFocus: (command) =>
       client.changeRisk({
@@ -623,6 +685,7 @@ async function createDaemonRuntime(projectRoot: string): Promise<CliRuntime> {
         paths: command.paths,
         depth: command.depth,
         maxFindings: command.maxFindings,
+        maxFiles: command.maxFiles,
       }),
     changeDelta: async (command) => {
       const baselinePath = resolveBaselinePath(
@@ -645,6 +708,7 @@ async function createDaemonRuntime(projectRoot: string): Promise<CliRuntime> {
     apiSurface: (command) =>
       client.apiSurface({
         projectRoot: command.projectRoot,
+        path: command.path,
         maxExports: command.maxExports,
       }),
     layerBoundaries: (command) =>
@@ -737,6 +801,22 @@ async function executeAndFormat(command: CliCommand, runtime: CliRuntime): Promi
     case "change-risk": {
       const result = await runtime.changeRisk(command);
       return command.json ? JSON.stringify(result, null, 2) : formatChangeRisk(result);
+    }
+    case "before-edit": {
+      const result = await runtime.beforeEdit(command);
+      const advisory = {
+        advisory: true,
+        safeToEdit: result.level !== "high",
+        level: result.level,
+        score: result.score,
+        focus: result.focus,
+        reasons: result.reasons,
+        impactedFiles: result.impactedFiles,
+        impactedFilesTruncated: result.impactedFilesTruncated,
+        omittedImpactedFiles: result.omittedImpactedFiles,
+        indexedAtUnixMs: result.indexedAtUnixMs,
+      };
+      return command.json ? JSON.stringify(advisory, null, 2) : formatBeforeEdit(advisory);
     }
     case "review-focus": {
       const result = await runtime.reviewFocus(command);
@@ -922,6 +1002,23 @@ function createDoctorHealthReport(status: StatusResponse): HealthReport {
       message: `${status.health.queueDepth} pending index batches`,
     },
     {
+      name: "queue_drops",
+      status: (status.health.droppedBatches ?? 0) > 0 ? "warn" : "ok",
+      message: `${status.health.droppedBatches ?? 0} dropped index batches`,
+    },
+    {
+      name: "index_failures",
+      status: (status.health.failedBatches ?? 0) > 0 ? "warn" : "ok",
+      message: `${status.health.failedBatches ?? 0} failed index batches`,
+    },
+    {
+      name: "latency_metrics",
+      status: status.health.metrics ? "ok" : "warn",
+      message: status.health.metrics
+        ? `${Object.keys(status.health.metrics.operations).length} operation histograms`
+        : "daemon has not reported operation metrics",
+    },
+    {
       name: "index_state",
       status: status.health.indexedFiles > 0 ? "ok" : "warn",
       message: `${status.health.indexedFiles} files indexed`,
@@ -998,8 +1095,11 @@ function formatImpactCone(impactCone: ImpactConeResponse): string {
     `path: ${impactCone.path}`,
     `depth: ${impactCone.depth}`,
     `files: ${impactCone.files.length}`,
+    impactCone.omittedCount ? `omitted_files: ${impactCone.omittedCount}` : undefined,
     ...impactCone.files,
-  ].join("\n");
+  ]
+    .filter((line): line is string => typeof line === "string")
+    .join("\n");
 }
 
 function formatChangeRisk(changeRisk: ChangeRiskResponse): string {
@@ -1008,9 +1108,35 @@ function formatChangeRisk(changeRisk: ChangeRiskResponse): string {
     `score: ${changeRisk.score}`,
     `paths: ${changeRisk.paths.length}`,
     `impacted_files: ${changeRisk.impactedFiles.length}`,
+    changeRisk.omittedImpactedFiles ? `omitted_impacted_files: ${changeRisk.omittedImpactedFiles}` : undefined,
     `reasons: ${changeRisk.reasons.length}`,
     ...changeRisk.reasons.map((reason) => `${reason.severity} ${reason.kind}: ${reason.detail}`),
-  ].join("\n");
+  ]
+    .filter((line): line is string => typeof line === "string")
+    .join("\n");
+}
+
+function formatBeforeEdit(result: {
+  safeToEdit: boolean;
+  level: string;
+  score: number;
+  focus: ChangeRiskResponse["focus"];
+  reasons: ChangeRiskResponse["reasons"];
+  impactedFiles: string[];
+  omittedImpactedFiles?: number;
+}): string {
+  return [
+    "advisory: true",
+    `safe_to_edit: ${result.safeToEdit}`,
+    `level: ${result.level}`,
+    `score: ${result.score}`,
+    `impacted_files: ${result.impactedFiles.length}`,
+    result.omittedImpactedFiles ? `omitted_impacted_files: ${result.omittedImpactedFiles}` : undefined,
+    `focus: ${result.focus.length}`,
+    `reasons: ${result.reasons.length}`,
+  ]
+    .filter((line): line is string => typeof line === "string")
+    .join("\n");
 }
 
 function formatReviewFocus(changeRisk: ChangeRiskResponse): string {
@@ -1058,9 +1184,11 @@ type ParsedOptions = {
   includeEvidence: boolean;
   json: boolean;
   maxExports: number;
+  maxFiles: number;
   maxFindings: number;
   maxItems: number;
   paths: string[];
+  pathsFromStdin: boolean;
   projectRoot: string;
   pruneLogs: boolean;
   sessionID?: string;
@@ -1081,9 +1209,11 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
     includeEvidence: false,
     json: false,
     maxExports: 100,
+    maxFiles: DEFAULT_MAX_FILES,
     maxFindings: DEFAULT_MAX_FINDINGS,
     maxItems: 10,
     paths: [],
+    pathsFromStdin: false,
     projectRoot: path.resolve(cwd),
     pruneLogs: false,
     slug: "codemem-audit",
@@ -1196,6 +1326,10 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
         index += 1;
         break;
       }
+      case "--paths-stdin":
+      case "--stdin":
+        options.pathsFromStdin = true;
+        break;
       case "--max-findings": {
         const value = readOptionValue(
           argv,
@@ -1250,6 +1384,24 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
         index += 1;
         break;
       }
+      case "--max-files": {
+        const value = readOptionValue(
+          argv,
+          index,
+          "--max-files",
+          "codemem impact-cone --path src/index.ts --max-files 50 --json",
+        );
+        if (!value.ok) return value;
+        const parsed = parsePositiveInteger(
+          value.value,
+          "--max-files",
+          "codemem impact-cone --path src/index.ts --max-files 50 --json",
+        );
+        if (!parsed.ok) return parsed;
+        options.maxFiles = parsed.value;
+        index += 1;
+        break;
+      }
       case "--depth": {
         const value = readOptionValue(
           argv,
@@ -1288,7 +1440,7 @@ function parseOptions(argv: string[], cwd: string): OptionsParseResult {
         return {
           ok: false,
           exitCode: 2,
-          message: `Unknown codemem option: ${arg}\n\n${rootHelp()}`,
+          message: `Unknown codemem option: ${arg}\n\nExample: codemem check --path src/index.ts --json`,
         };
     }
   }
@@ -1305,9 +1457,46 @@ function checkCommandFor(
     json: false,
     maxFindings: command.maxFindings,
     paths: [],
+    pathsFromStdin: false,
     projectRoot: command.projectRoot,
     waitForFreshIndex: true,
   };
+}
+
+async function hydrateStdinPaths(
+  command: CliCommand,
+  stdin?: () => Promise<string>,
+): Promise<CliCommand> {
+  if (!commandAcceptsStdinPaths(command) || !command.pathsFromStdin) {
+    return command;
+  }
+  const raw = stdin ? await stdin() : await readProcessStdin();
+  const stdinPaths = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const paths = [...command.paths, ...stdinPaths];
+  if (paths.length === 0) {
+    throw new Error(
+      `Missing --path or stdin paths for ${command.kind}. Example: printf 'src/index.ts\\n' | codemem ${command.kind} --paths-stdin --json`,
+    );
+  }
+  return { ...command, paths };
+}
+
+function commandAcceptsStdinPaths(
+  command: CliCommand,
+): command is CheckCliCommand | ChangeRiskCliCommand | BeforeEditCliCommand | ReviewFocusCliCommand {
+  return (
+    command.kind === "check" ||
+    command.kind === "change-risk" ||
+    command.kind === "before-edit" ||
+    command.kind === "review-focus"
+  );
+}
+
+async function readProcessStdin(): Promise<string> {
+  return Bun.stdin.text();
 }
 
 function parseArtifactKind(
@@ -1332,7 +1521,10 @@ function validateArtifactSlug(slug: string): void {
 function parseBaselineCommand(argv: string[], cwd: string): CliParseResult {
   const [subcommand, ...rest] = argv;
   if (!subcommand || subcommand === "--help" || subcommand === "-h") {
-    return { ok: false, exitCode: 0, message: rootHelp() };
+    return { ok: false, exitCode: 0, message: commandHelp("baseline") };
+  }
+  if (rest.includes("--help") || rest.includes("-h")) {
+    return { ok: false, exitCode: 0, message: commandHelp(`baseline ${subcommand}`) };
   }
   const parsedOptions = parseOptions(rest, cwd);
   if (!parsedOptions.ok) {
@@ -1368,7 +1560,7 @@ function parseBaselineCommand(argv: string[], cwd: string): CliParseResult {
       return {
         ok: false,
         exitCode: 2,
-        message: `Unknown codemem baseline command: ${subcommand}\n\n${rootHelp()}`,
+        message: `Unknown codemem baseline command: ${subcommand}\n\nExample: codemem baseline diff --json`,
       };
   }
 }
@@ -1441,7 +1633,7 @@ function requiredPaths(
   options: ParsedOptions,
   commandName: string,
 ): { ok: true; value: string[] } | CliErrorResult {
-  if (options.paths.length === 0) {
+  if (options.paths.length === 0 && !options.pathsFromStdin) {
     return {
       ok: false,
       exitCode: 2,
@@ -1459,6 +1651,68 @@ function missingValue(flag: string, example: string): CliErrorResult {
   };
 }
 
+function wantsJson(argv: string[]): boolean {
+  return argv.includes("--json");
+}
+
+function formatCliErrorJson(error: CliErrorResult, argv: string[], started: number): string {
+  return JSON.stringify(
+    {
+      ok: false,
+      error: {
+        code: error.exitCode === 2 ? "E_CODEMEM_CLI_USAGE" : "E_CODEMEM_CLI_ERROR",
+        message: error.message.split("\n")[0],
+        retryable: false,
+        example: exampleFromMessage(error.message),
+      },
+      operation: operationEnvelope(argv, started, 0),
+    },
+    null,
+    2,
+  );
+}
+
+function formatRuntimeErrorJson(error: unknown, argv: string[], started: number): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return JSON.stringify(
+    {
+      ok: false,
+      error: {
+        code: "E_CODEMEM_CLI_RUNTIME",
+        message,
+        retryable: false,
+      },
+      operation: operationEnvelope(argv, started, 0),
+    },
+    null,
+    2,
+  );
+}
+
+function operationEnvelope(argv: string[], started: number, bytesOut: number): {
+  name: string;
+  durationMs: number;
+  counts: Record<string, number>;
+  truncated: boolean;
+  bytesOut: number;
+} {
+  return {
+    name: argv[0] ?? "help",
+    durationMs: Date.now() - started,
+    counts: {},
+    truncated: false,
+    bytesOut,
+  };
+}
+
+function exampleFromMessage(message: string): string | undefined {
+  const example = message
+    .split("\n")
+    .find((line) => line.startsWith("Example: "))
+    ?.slice("Example: ".length);
+  return example && example.length > 0 ? example : undefined;
+}
+
 function formatError(error: unknown): string {
   return error instanceof Error ? `Error: ${error.message}` : `Error: ${String(error)}`;
 }
@@ -1468,66 +1722,231 @@ function rootHelp(): string {
     "Usage: codemem <command> [options]",
     "",
     "Commands:",
-    "  doctor      Run fleet-standard health check",
-    "  status      Show daemon and index status",
-    "  check       Run analysis.check",
-    "  drift-map   Run analysis.driftMap",
-    "  conflicts   Run analysis.conflicts",
-    "  maintain    Preview or apply maintenance actions",
-    "  rebuild     Preview or apply index rebuild",
-    "  baseline    Diff or write finding baselines",
-    "  impact-cone Show dependency impact cone for a path",
-    "  change-risk Score dependency-graph risk for changed paths",
-    "  review-focus Rank paths and symbols that need review attention",
-    "  change-delta Diff current findings against a baseline",
-    "  api-surface Show indexed public exports",
-    "  layer-boundaries Show configured layer boundaries and package cycles",
-    "  lockfile    Show known lockfiles and digests",
-    "  explain     Explain one finding by stable id",
-    "  report      Export findings as JSON, Markdown, or SARIF",
-    "  artifact    Emit codemem findings to Conductor/Engram artifacts",
-    "",
-    "Options:",
-    "  --project-root <path>   Project root (default: current directory)",
-    "  --json                  Print JSON output",
-    "  --path <path>           Limit check to a path; repeatable",
-    "  --max-findings <n>      Maximum findings for check/drift-map",
-    "  --max-items <n>         Maximum review-focus items",
-    "  --include-evidence      Include finding evidence in check output",
-    "  --no-wait               Do not force a fresh index before check",
-    "  --session-id <id>       Filter conflicts by session",
-    "  --dry-run               Preview mutating commands (default)",
-    "  --apply                 Apply maintain/rebuild actions",
-    "  --prune-logs            Include log pruning in maintain",
-    "  --compact               Include SQLite compact in maintain",
-    "  --baseline <path>       Finding baseline path",
-    "  --depth <n>             Impact cone depth",
-    "  --id <finding-id>       Finding id for explain",
-    "  --format <format>       Report format: json, markdown, sarif",
-    "  --kind <kind>           Artifact kind: audit, journal",
-    "  --slug <slug>           Audit artifact slug",
+    "  doctor, status, stop, cleanup",
+    "  check, drift-map, conflicts",
+    "  before-edit, change-risk, review-focus, impact-cone",
+    "  api-surface, layer-boundaries, lockfile",
+    "  baseline, change-delta, explain, report, artifact",
     "",
     "Examples:",
     "  codemem doctor --json",
-    "  codemem status --json",
-    "  codemem check --path src/index.ts --max-findings 25 --json",
-    "  codemem drift-map --max-findings 50 --json",
-    "  codemem conflicts --session-id sess_123 --json",
-    "  codemem maintain --compact --json",
-    "  codemem rebuild --apply --json",
-    "  codemem baseline diff --json",
-    "  codemem baseline write --apply --json",
-    "  codemem impact-cone --path src/index.ts --depth 2 --json",
-    "  codemem change-risk --path src/index.ts --depth 2 --json",
-    "  codemem review-focus --path src/index.ts --max-items 10 --json",
-    "  codemem change-delta --baseline .codemem/findings-baseline.json --json",
-    "  codemem api-surface --json",
-    "  codemem layer-boundaries --json",
-    "  codemem lockfile --json",
-    "  codemem explain --id dead:src/a.ts:unused",
-    "  codemem report --format sarif --json",
-    "  codemem artifact --kind audit --slug codemem-audit --apply --json",
+    "  codemem check --path src/index.ts --json",
+    "  printf 'src/a.ts\\nsrc/b.ts\\n' | codemem before-edit --paths-stdin --json",
+    "",
+    "Run `codemem <command> --help` for flags and copy-pasteable examples.",
   ].join("\n");
+}
+
+function commandHelp(commandName: string): string {
+  const common = ["", "Common flags:", "  --project-root <path>   Project root (default: current directory)", "  --json                  Stable JSON output"];
+  const pathBulk = [
+    "  --path <path>           Path input; repeatable",
+    "  --paths-stdin           Read newline-delimited paths from stdin",
+  ];
+  const examples: Record<string, string[]> = {
+    doctor: ["Usage: codemem doctor [--json]", ...common, "", "Examples:", "  codemem doctor --json"],
+    status: ["Usage: codemem status [--json]", ...common, "", "Examples:", "  codemem status --json"],
+    stop: ["Usage: codemem stop [--json]", ...common, "", "Examples:", "  codemem stop --json"],
+    cleanup: [
+      "Usage: codemem cleanup --stale [--json]",
+      ...common,
+      "  --stale                 Remove only proven-stale daemon state",
+      "",
+      "Examples:",
+      "  codemem cleanup --stale --json",
+    ],
+    check: [
+      "Usage: codemem check [--path <path>...] [--paths-stdin] [--json]",
+      ...common,
+      ...pathBulk,
+      "  --max-findings <n>      Maximum findings (default: 50)",
+      "  --include-evidence      Include evidence arrays",
+      "  --no-wait               Do not force a fresh index first",
+      "",
+      "Examples:",
+      "  codemem check --path src/index.ts --max-findings 25 --json",
+      "  printf 'src/a.ts\\nsrc/b.ts\\n' | codemem check --paths-stdin --json",
+    ],
+    "drift-map": [
+      "Usage: codemem drift-map [--max-findings <n>] [--json]",
+      ...common,
+      "  --max-findings <n>      Maximum findings in map (default: 50)",
+      "",
+      "Examples:",
+      "  codemem drift-map --max-findings 50 --json",
+    ],
+    conflicts: [
+      "Usage: codemem conflicts [--session-id <id>] [--json]",
+      ...common,
+      "  --session-id <id>       Optional session filter",
+      "",
+      "Examples:",
+      "  codemem conflicts --session-id sess_123 --json",
+    ],
+    maintain: [
+      "Usage: codemem maintain [--prune-logs] [--compact] [--apply] [--json]",
+      ...common,
+      "  --prune-logs            Include log pruning",
+      "  --compact               Include SQLite checkpoint/VACUUM",
+      "  --apply                 Apply actions (dry-run by default)",
+      "",
+      "Examples:",
+      "  codemem maintain --compact --json",
+      "  codemem maintain --prune-logs --compact --apply --json",
+    ],
+    rebuild: [
+      "Usage: codemem rebuild [--apply] [--json]",
+      ...common,
+      "  --apply                 Rebuild now (dry-run by default)",
+      "",
+      "Examples:",
+      "  codemem rebuild --json",
+      "  codemem rebuild --apply --json",
+    ],
+    "before-edit": [
+      "Usage: codemem before-edit --path <path>... [--paths-stdin] [--json]",
+      ...common,
+      ...pathBulk,
+      "  --depth <n>             Dependency cone depth (default: 2)",
+      "  --max-files <n>         Maximum impacted files returned (default: 50)",
+      "",
+      "Examples:",
+      "  codemem before-edit --path src/index.ts --depth 2 --json",
+      "  printf 'src/a.ts\\nsrc/b.ts\\n' | codemem before-edit --paths-stdin --max-files 25 --json",
+    ],
+    "impact-cone": [
+      "Usage: codemem impact-cone --path <path> [--depth <n>] [--json]",
+      ...common,
+      "  --path <path>           Seed file",
+      "  --depth <n>             Dependency cone depth (default: 2)",
+      "  --max-files <n>         Maximum files returned (default: 50)",
+      "",
+      "Examples:",
+      "  codemem impact-cone --path src/index.ts --depth 2 --max-files 50 --json",
+    ],
+    "change-risk": [
+      "Usage: codemem change-risk --path <path>... [--paths-stdin] [--json]",
+      ...common,
+      ...pathBulk,
+      "  --depth <n>             Dependency cone depth (default: 2)",
+      "  --max-files <n>         Maximum impacted files returned (default: 50)",
+      "  --max-findings <n>      Maximum nearby findings (default: 50)",
+      "",
+      "Examples:",
+      "  codemem change-risk --path src/index.ts --depth 2 --json",
+      "  printf 'src/a.ts\\nsrc/b.ts\\n' | codemem change-risk --paths-stdin --json",
+    ],
+    "review-focus": [
+      "Usage: codemem review-focus --path <path>... [--paths-stdin] [--json]",
+      ...common,
+      ...pathBulk,
+      "  --max-items <n>         Maximum focus items (default: 10)",
+      "  --max-files <n>         Maximum impacted files returned (default: 50)",
+      "",
+      "Examples:",
+      "  codemem review-focus --path src/index.ts --max-items 10 --json",
+    ],
+    "api-surface": [
+      "Usage: codemem api-surface [--path <path>] [--max-exports <n>] [--json]",
+      ...common,
+      "  --path <path>           Optional source file filter",
+      "  --max-exports <n>       Maximum exports returned (default: 100)",
+      "",
+      "Examples:",
+      "  codemem api-surface --json",
+      "  codemem api-surface --path src/public-api.ts --max-exports 50 --json",
+    ],
+    "layer-boundaries": [
+      "Usage: codemem layer-boundaries [--max-findings <n>] [--json]",
+      ...common,
+      "  --max-findings <n>      Maximum cycle findings (default: 50)",
+      "",
+      "Examples:",
+      "  codemem layer-boundaries --max-findings 25 --json",
+    ],
+    lockfile: [
+      "Usage: codemem lockfile [--json]",
+      ...common,
+      "",
+      "Examples:",
+      "  codemem lockfile --json",
+    ],
+    baseline: [
+      "Usage: codemem baseline <diff|write> [options]",
+      ...common,
+      "  --baseline <path>       Baseline path",
+      "  --apply                 Required to write a baseline",
+      "",
+      "Examples:",
+      "  codemem baseline diff --baseline .codemem/findings-baseline.json --json",
+      "  codemem baseline write --apply --json",
+    ],
+    "baseline diff": [
+      "Usage: codemem baseline diff [--baseline <path>] [--json]",
+      ...common,
+      "  --baseline <path>       Baseline path",
+      "",
+      "Examples:",
+      "  codemem baseline diff --baseline .codemem/findings-baseline.json --json",
+    ],
+    "baseline write": [
+      "Usage: codemem baseline write [--baseline <path>] --apply [--json]",
+      ...common,
+      "  --baseline <path>       Baseline path",
+      "  --apply                 Write the baseline (dry-run by default)",
+      "",
+      "Examples:",
+      "  codemem baseline write --apply --json",
+    ],
+    explain: [
+      "Usage: codemem explain --id <finding-id> [--json]",
+      ...common,
+      "  --id <finding-id>       Stable finding id",
+      "",
+      "Examples:",
+      "  codemem explain --id dead:src/a.ts:unused --json",
+    ],
+    "change-delta": [
+      "Usage: codemem change-delta [--baseline <path>] [--json]",
+      ...common,
+      "  --baseline <path>       Baseline path",
+      "  --max-findings <n>      Maximum current findings (default: 50)",
+      "",
+      "Examples:",
+      "  codemem change-delta --baseline .codemem/findings-baseline.json --json",
+    ],
+    report: [
+      "Usage: codemem report --format <json|markdown|sarif> [--json]",
+      ...common,
+      "  --format <format>       json, markdown, or sarif",
+      "  --max-findings <n>      Maximum findings (default: 50)",
+      "",
+      "Examples:",
+      "  codemem report --format sarif --json",
+      "  codemem report --format markdown",
+    ],
+    artifact: [
+      "Usage: codemem artifact --kind <audit|journal> [--apply] [--json]",
+      ...common,
+      "  --kind <kind>           audit or journal",
+      "  --slug <slug>           Audit artifact slug",
+      "  --apply                 Write artifact (dry-run by default)",
+      "",
+      "Examples:",
+      "  codemem artifact --kind audit --slug codemem-audit --apply --json",
+      "  codemem artifact --kind journal --json",
+    ],
+  };
+  return (
+    examples[commandName] ??
+    [
+      `Usage: codemem ${commandName} [options]`,
+      ...common,
+      "",
+      "Examples:",
+      `  codemem ${commandName} --json`,
+    ]
+  ).join("\n");
 }
 
 if (isCliEntrypoint(process.argv[1])) {

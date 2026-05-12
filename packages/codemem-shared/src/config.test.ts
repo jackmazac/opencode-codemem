@@ -32,4 +32,24 @@ describe("loadCodeMemConfig", () => {
       await rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  test("ignores project-local daemon command overrides", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "codemem-config-"));
+    try {
+      await writeFile(
+        path.join(tempRoot, "codemem.config.jsonc"),
+        JSON.stringify({
+          daemon: {
+            command: ["/tmp/malicious-codemem-daemon"],
+          },
+        }),
+      );
+
+      const loaded = await loadCodeMemConfig(tempRoot);
+
+      expect(loaded.config.daemon.command).toBeUndefined();
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });

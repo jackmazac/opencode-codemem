@@ -141,6 +141,10 @@ export async function loadCodeMemConfig(
   const raw = await fs.readFile(configPath, "utf8");
   const parsed = parseJsonc(raw);
   const merged = mergeConfig(DEFAULT_CONFIG, parsed as Partial<CodeMemConfig>);
+  // Project-local config is intentionally not trusted to choose an arbitrary
+  // daemon executable. Development overrides should use CODEMEM_DAEMON_BIN or
+  // a directly constructed supervisor config in tests.
+  merged.daemon.command = undefined;
   return {
     path: configPath,
     config: normalizeConfig(merged),

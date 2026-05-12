@@ -422,8 +422,8 @@ Recommended layout:
   codemem.sqlite3
   run/
     codemem.sock        # POSIX
-    daemon.pid
-    daemon.token
+    codemem.pid
+    codemem.token
   ann/
     semantic.usearch    # only when L3 enabled
   log/
@@ -550,8 +550,8 @@ The attached code implements the RPC layer for these commands. A thin CLI wrappe
 
 * POSIX: Unix domain socket in `state/run/codemem.sock`
 * Windows: named pipe branch in daemon/server code
-* auth token in `state/run/daemon.token`
-* PID file in `state/run/daemon.pid`
+* auth token in `state/run/codemem.token`
+* PID file in `state/run/codemem.pid`
 
 **Wire format**
 

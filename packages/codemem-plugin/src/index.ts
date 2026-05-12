@@ -8,7 +8,8 @@ import {
 } from "@codemem/shared/protocol";
 import { loadCodeMemConfig, resolveStateDirectory, type LoadedCodeMemConfig } from "@codemem/shared/config";
 import type { Plugin } from "@opencode-ai/plugin";
-import { wrapPlugin } from "@jackmazac/opencode-host-adapter";
+import { makeEnvelope } from "@jackmazac/opencode-fleet-contracts";
+import { emitFleet, wrapPlugin } from "@jackmazac/opencode-host-adapter";
 import { createCodeMemTools, type CodeMemToolRuntime } from "./tools";
 import { DaemonSupervisor } from "./daemon/supervisor";
 import type { DaemonClient } from "./daemon/client";
@@ -175,43 +176,74 @@ class PluginRuntime implements CodeMemToolRuntime {
 }
 
 const plugin: Plugin = async (input) => {
+  const initStarted = Date.now();
   const runtime = new PluginRuntime(input.worktree || input.directory, input.client);
+  emitPluginTelemetry("plugin.init", {
+    durationMs: Date.now() - initStarted,
+    projectRoot: runtime.projectRoot,
+  });
 
   return {
     tool: createCodeMemTools(runtime),
 
     event: async ({ event }) => {
+      const started = Date.now();
       const eventType = String(event?.type ?? "");
-      if (eventType === "file.edited") {
-        const file = event?.properties?.file;
-        if (typeof file === "string") {
-          const sessionID = typeof event?.properties?.sessionID === "string" ? event.properties.sessionID : "event";
-          await runtime.queueChangedFiles(sessionID, [file], "event");
+      try {
+        if (eventType === "file.edited") {
+          const file = event?.properties?.file;
+          if (typeof file === "string") {
+            const sessionID = typeof event?.properties?.sessionID === "string" ? event.properties.sessionID : "event";
+            await runtime.queueChangedFiles(sessionID, [file], "event");
+          }
+          return;
         }
-        return;
-      }
 
-      if (eventType === "file.watcher.updated") {
-        const file = event?.properties?.file;
-        const changeKind = event?.properties?.event;
-        if (typeof file === "string" && (changeKind === "add" || changeKind === "change")) {
-          await runtime.queueChangedFiles("watcher", [file], "event");
+        if (eventType === "file.watcher.updated") {
+          const file = event?.properties?.file;
+          const changeKind = event?.properties?.event;
+          if (typeof file === "string" && (changeKind === "add" || changeKind === "change")) {
+            await runtime.queueChangedFiles("watcher", [file], "event");
+          }
         }
+      } finally {
+        emitPluginTelemetry("hook.event", {
+          durationMs: Date.now() - started,
+          eventType,
+        });
       }
     },
 
     "tool.execute.after": async (hook, output) => {
+      const started = Date.now();
       const changedFiles = extractChangedFiles(hook.tool, hook.args, runtime.projectRoot);
-      if (changedFiles.length > 0) {
-        await runtime.queueChangedFiles(hook.sessionID, changedFiles, "tool");
+      try {
+        if (changedFiles.length > 0) {
+          await runtime.queueChangedFiles(hook.sessionID, changedFiles, "tool");
 
-        const warning = await runtime.currentWarning();
-        if (warning) {
-          output.metadata = {
-            ...(output.metadata ?? {}),
-            codememWarning: warning,
-          };
+          const warning = await runtime.currentWarning();
+          if (warning) {
+            output.metadata = {
+              ...(output.metadata ?? {}),
+              codememWarning: warning,
+            };
+          }
         }
+      } finally {
+        const durationMs = Date.now() - started;
+        output.metadata = {
+          ...(output.metadata ?? {}),
+          codememTelemetry: {
+            operation: "hook.tool_execute_after",
+            durationMs,
+            changedFiles: changedFiles.length,
+          },
+        };
+        emitPluginTelemetry("hook.tool_execute_after", {
+          durationMs,
+          tool: hook.tool,
+          changedFiles: changedFiles.length,
+        });
       }
     },
   };
@@ -283,6 +315,24 @@ function normalizeProjectRelative(projectRoot: string, candidate: string): strin
 
 function isEligibleCodePath(candidate: string): boolean {
   return Boolean(candidate) && !candidate.startsWith("..") && CODE_FILE.test(candidate);
+}
+
+function emitPluginTelemetry(kind: `${string}.${string}`, detail: Record<string, unknown>): void {
+  try {
+    const durationMs = typeof detail.durationMs === "number" ? detail.durationMs : undefined;
+    const tool = typeof detail.tool === "string" ? detail.tool : undefined;
+    emitFleet(
+      makeEnvelope({
+        kind,
+        plugin: "codemem",
+        status: "ok",
+        durationMs,
+        tool,
+      }),
+    );
+  } catch {
+    // Telemetry is best-effort and must never affect plugin startup or hooks.
+  }
 }
 
 function normalizePromptClient(client: unknown): PromptClient {
