@@ -21,7 +21,11 @@ artifacts/
 packages/codemem-plugin/bin/
 
 # Logs and coverage
-bench/results/
+bench/results/*
+!bench/results/codemem-bench-quick.json
+!bench/results/codemem-bench-threshold-quick.json
+!bench/results/codemem-bench-full.json
+!bench/results/codemem-bench-threshold-full.json
 coverage/
 *.log
 

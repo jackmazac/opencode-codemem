@@ -31,6 +31,8 @@ import type {
 } from "@codemem/shared/protocol";
 import { DaemonSupervisor, type DaemonStopResult, type StaleEndpointCleanup } from "./daemon/supervisor";
 
+type CodeMemDoctorReport = HealthReport & { health: StatusResponse["health"] };
+
 type BaseCliCommand = {
   json: boolean;
   projectRoot: string;
@@ -931,6 +933,9 @@ function formatStatus(status: StatusResponse): string {
     status.lifecycle ? `lifecycle_log: ${status.lifecycle.lifecycleLogFile}` : undefined,
     `files_indexed: ${status.health.indexedFiles}`,
     `queue_depth: ${status.health.queueDepth}`,
+    status.health.rssBytes === undefined || status.health.rssBytes === null
+      ? undefined
+      : `rss_mb: ${bytesToMiB(status.health.rssBytes).toFixed(1)}`,
   ]
     .filter((line): line is string => typeof line === "string")
     .join("\n");
@@ -969,7 +974,7 @@ function formatCleanup(result: CleanupResponse): string {
   ].join("\n");
 }
 
-function createDoctorHealthReport(status: StatusResponse): HealthReport {
+function createDoctorHealthReport(status: StatusResponse): CodeMemDoctorReport {
   const startedAt = new Date().toISOString();
   const checks: HealthCheck[] = [
     {
@@ -1019,6 +1024,19 @@ function createDoctorHealthReport(status: StatusResponse): HealthReport {
         : "daemon has not reported operation metrics",
     },
     {
+      name: "memory_rss",
+      status:
+        status.health.rssBytes === undefined || status.health.rssBytes === null ? "warn" : "ok",
+      message:
+        status.health.rssBytes === undefined || status.health.rssBytes === null
+          ? (status.health.rssUnavailableReason ?? "daemon rss unavailable")
+          : `${bytesToMiB(status.health.rssBytes).toFixed(1)} MiB resident set`,
+      detail: {
+        rssBytes: status.health.rssBytes ?? null,
+        rssUnavailableReason: status.health.rssUnavailableReason,
+      },
+    },
+    {
       name: "index_state",
       status: status.health.indexedFiles > 0 ? "ok" : "warn",
       message: `${status.health.indexedFiles} files indexed`,
@@ -1029,12 +1047,20 @@ function createDoctorHealthReport(status: StatusResponse): HealthReport {
       message: `${status.health.findingsCacheEntries} cached finding sets`,
     },
   ];
-  return makeHealthReport({
+  const report = makeHealthReport({
     source: "codemem",
     checks,
     started_at: startedAt,
     finished_at: new Date().toISOString(),
   });
+  return {
+    ...report,
+    health: status.health,
+  };
+}
+
+function bytesToMiB(bytes: number): number {
+  return bytes / 1024 / 1024;
 }
 
 function formatCheck(check: CheckResponse): string {

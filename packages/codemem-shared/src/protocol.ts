@@ -218,6 +218,8 @@ export type HealthResponse = {
   failedBatches?: number;
   indexedFiles: number;
   findingsCacheEntries: number;
+  rssBytes?: number | null;
+  rssUnavailableReason?: string;
   metrics?: TelemetrySnapshot;
   warnings?: string[];
   checks?: Array<{ name: string; status: "ok" | "warn" | "fail"; message: string }>;

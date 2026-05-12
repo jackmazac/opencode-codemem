@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "mode": "full",
+  "project_root": "/var/folders/ml/p_w___pn5jlbtt8fj2lrvwbm0000gp/T/codemem-bench-fdM0MP",
+  "generated_at": "2026-05-12T21:22:27.128Z",
+  "result_path": "/Users/jack.mazac/Developer/codemem/bench/results/codemem-bench-full.json",
+  "results": [
+    {
+      "name": "status-cold",
+      "command": [
+        "bun",
+        "/Users/jack.mazac/Developer/codemem/packages/codemem-plugin/src/cli.ts",
+        "status",
+        "--project-root",
+        "/var/folders/ml/p_w___pn5jlbtt8fj2lrvwbm0000gp/T/codemem-bench-fdM0MP",
+        "--json"
+      ],
+      "duration_ms": 100,
+      "p50_ms": 35,
+      "p95_ms": 100,
+      "max_ms": 100,
+      "iterations": 5,
+      "ok": true,
+      "exit_code": 0,
+      "output_bytes": 2330,
+      "output_max_bytes": 2330,
+      "rss_mb": 6.3
+    },
+    {
+      "name": "cold-check",
+      "command": [
+        "bun",
+        "/Users/jack.mazac/Developer/codemem/packages/codemem-plugin/src/cli.ts",
+        "check",
+        "--project-root",
+        "/var/folders/ml/p_w___pn5jlbtt8fj2lrvwbm0000gp/T/codemem-bench-fdM0MP",
+        "--path",
+        "src/index.ts",
+        "--max-findings",
+        "50",
+        "--json"
+      ],
+      "duration_ms": 37,
+      "p50_ms": 35,
+      "p95_ms": 37,
+      "max_ms": 37,
+      "iterations": 5,
+      "ok": true,
+      "exit_code": 0,
+      "output_bytes": 214,
+      "output_max_bytes": 214,
+      "rss_mb": 6.3
+    },
+    {
+      "name": "hot-edit-check",
+      "command": [
+        "bun",
+        "/Users/jack.mazac/Developer/codemem/packages/codemem-plugin/src/cli.ts",
+        "check",
+        "--project-root",
+        "/var/folders/ml/p_w___pn5jlbtt8fj2lrvwbm0000gp/T/codemem-bench-fdM0MP",
+        "--path",
+        "src/feature.ts",
+        "--max-findings",
+        "50",
+        "--json"
+      ],
+      "duration_ms": 37,
+      "p50_ms": 34,
+      "p95_ms": 37,
+      "max_ms": 37,
+      "iterations": 5,
+      "ok": true,
+      "exit_code": 0,
+      "output_bytes": 214,
+      "output_max_bytes": 214,
+      "rss_mb": 9.3
+    },
+    {
+      "name": "review-focus",
+      "command": [
+        "bun",
+        "/Users/jack.mazac/Developer/codemem/packages/codemem-plugin/src/cli.ts",
+        "review-focus",
+        "--project-root",
+        "/var/folders/ml/p_w___pn5jlbtt8fj2lrvwbm0000gp/T/codemem-bench-fdM0MP",
+        "--path",
+        "src/index.ts",
+        "--depth",
+        "2",
+        "--max-findings",
+        "50",
+        "--max-items",
+        "10",
+        "--json"
+      ],
+      "duration_ms": 37,
+      "p50_ms": 35,
+      "p95_ms": 37,
+      "max_ms": 37,
+      "iterations": 5,
+      "ok": true,
+      "exit_code": 0,
+      "output_bytes": 2770,
+      "output_max_bytes": 2770,
+      "rss_mb": 9.3
+    },
+    {
+      "name": "status-warm",
+      "command": [
+        "bun",
+        "/Users/jack.mazac/Developer/codemem/packages/codemem-plugin/src/cli.ts",
+        "status",
+        "--project-root",
+        "/var/folders/ml/p_w___pn5jlbtt8fj2lrvwbm0000gp/T/codemem-bench-fdM0MP",
+        "--json"
+      ],
+      "duration_ms": 35,
+      "p50_ms": 33,
+      "p95_ms": 35,
+      "max_ms": 35,
+      "iterations": 5,
+      "ok": true,
+      "exit_code": 0,
+      "output_bytes": 2807,
+      "output_max_bytes": 2807,
+      "rss_mb": 9.3
+    },
+    {
+      "name": "source-size",
+      "command": [
+        "measure",
+        "/var/folders/ml/p_w___pn5jlbtt8fj2lrvwbm0000gp/T/codemem-bench-fdM0MP/src/index.ts"
+      ],
+      "duration_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "max_ms": 0,
+      "iterations": 1,
+      "ok": true,
+      "exit_code": 0,
+      "output_bytes": 173,
+      "output_max_bytes": 173
+    }
+  ],
+  "ok": true
+}

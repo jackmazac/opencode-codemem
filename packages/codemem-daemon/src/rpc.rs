@@ -5,6 +5,7 @@ use crate::{
         ImpactConeSummary, Indexer, LayerBoundarySummary, LockfileSummary, MaintainSummary,
         RebuildSummary,
     },
+    memory::RssSampler,
     model::{DriftMap, Evidence, Finding, Severity, StoreStats},
     protocol::FleetCorrelation,
 };
@@ -28,6 +29,7 @@ pub struct RpcContext {
     pub state_dir: PathBuf,
     pub config: Arc<ProjectConfig>,
     pub indexer: Arc<Indexer>,
+    pub rss_sampler: Arc<RssSampler>,
     pub started_at_unix_ms: i64,
     pub shutdown: Arc<Notify>,
 }
@@ -895,6 +897,7 @@ fn json_health(ctx: &RpcContext, stats: &StoreStats) -> Value {
             }
         })
         .collect::<Vec<_>>();
+    let rss_sample = ctx.rss_sampler.sample();
     let healthy = checks.iter().all(|check| {
         check
             .get("status")
@@ -902,7 +905,7 @@ fn json_health(ctx: &RpcContext, stats: &StoreStats) -> Value {
             .map(|status| status != "fail")
             .unwrap_or(false)
     });
-    json!({
+    let mut response = json!({
         "protocolVersion": ctx.protocol_version,
         "schemaVersion": SCHEMA_VERSION,
         "daemonVersion": DAEMON_VERSION,
@@ -914,10 +917,15 @@ fn json_health(ctx: &RpcContext, stats: &StoreStats) -> Value {
         "failedBatches": failed_batches,
         "indexedFiles": stats.indexed_files,
         "findingsCacheEntries": stats.findings_cache_entries,
+        "rssBytes": rss_sample.rss_bytes,
         "metrics": ctx.indexer.telemetry_snapshot(),
         "warnings": warnings,
         "checks": checks,
-    })
+    });
+    if let Some(reason) = rss_sample.rss_unavailable_reason {
+        response["rssUnavailableReason"] = json!(reason);
+    }
+    response
 }
 
 fn json_check(summary: CheckSummary, include_evidence: bool) -> Value {
@@ -1207,6 +1215,7 @@ mod tests {
     use crate::{
         config::ProjectConfig,
         indexer::Indexer,
+        memory::RssSampler,
         metrics::Metrics,
         model::{Evidence, Finding, Severity},
         session_conflicts::SessionConflictTracker,
@@ -1295,6 +1304,40 @@ mod tests {
         );
         assert!(details.get("params").is_none());
         assert!(!details.to_string().contains("do-not-echo"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_health_includes_rss_on_supported_platforms() {
+        let ctx = test_context("health-rss", None);
+        let response = dispatch(
+            &ctx,
+            RequestEnvelope {
+                jsonrpc: "2.0".into(),
+                protocol_version: ctx.protocol_version,
+                id: Some("request-health".into()),
+                auth_token: None,
+                method: "health".into(),
+                params: json!({ "projectRoot": ctx.project_root }),
+            },
+        )
+        .await;
+
+        let result = response.result.expect("health result");
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert!(
+            result["rssBytes"].as_u64().unwrap_or_default() > 0,
+            "health rssBytes should be a positive integer on supported OS: {result}"
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            assert!(result["rssBytes"].is_null());
+            assert!(
+                result["rssUnavailableReason"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("unsupported")
+            );
+        }
     }
 
     #[test]
@@ -1544,6 +1587,7 @@ mod tests {
             state_dir,
             config,
             indexer,
+            rss_sampler: RssSampler::new(),
             started_at_unix_ms: 0,
             shutdown: Arc::new(Notify::new()),
         })

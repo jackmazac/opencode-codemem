@@ -233,25 +233,28 @@ The threshold gate enforces regression bounds on the synthetic-project benchmark
 bun run bench:threshold -- --quick
 ```
 
+Bench reports include `rss_mb` when daemon health exposes `health.rssBytes`. RSS is the daemon process resident set size, sampled best-effort on macOS/Linux and cached on the health path for 500 ms to avoid syscall-heavy polling. Bench conversion is `rssBytes / 1024 / 1024`, rounded to one decimal place.
+
 Quick-mode thresholds:
 
-| Scenario | Max ms |
-|---|---|
-| status | 1000 |
-| check | 1500 |
-| api_surface | 1500 |
-| impact_cone | 1500 |
-| layer_boundaries | 1500 |
+| Scenario | Max ms | Max RSS MB |
+|---|---:|---:|
+| health | 1000 | 200 |
+| status | 1000 | 200 |
+| check | 1500 | 200 |
+| api_surface | 1500 | - |
+| impact_cone | 1500 | - |
+| layer_boundaries | 1500 | - |
 
 Full-mode thresholds:
 
-| Scenario | Max ms |
-|---|---|
-| status-cold | 1500 |
-| cold-check | 1500 |
-| hot-edit-check | 750 |
-| review-focus | 1500 |
-| status-warm | 750 |
+| Scenario | Max ms | Max RSS MB |
+|---|---:|---:|
+| status-cold | 1500 | 200 |
+| cold-check | 1500 | - |
+| hot-edit-check | 750 | 200 |
+| review-focus | 1500 | - |
+| status-warm | 750 | 200 |
 
 Run the full benchmark suite:
 

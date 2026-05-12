@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "quick": [
-    { "name": "health", "max_ms": 1000 },
-    { "name": "status", "max_ms": 1000 },
-    { "name": "check", "max_ms": 1500 },
+    { "name": "health", "max_ms": 1000, "max_rss_mb": 200 },
+    { "name": "status", "max_ms": 1000, "max_rss_mb": 200 },
+    { "name": "check", "max_ms": 1500, "max_rss_mb": 200 },
     { "name": "drift_map", "max_ms": 1500 },
     { "name": "conflicts", "max_ms": 1500 },
     { "name": "change_risk", "max_ms": 1500 },
@@ -14,10 +14,10 @@
     { "name": "artifact", "max_ms": 1500 }
   ],
   "full": [
-    { "name": "status-cold", "max_ms": 1500 },
+    { "name": "status-cold", "max_ms": 1500, "max_rss_mb": 200 },
     { "name": "cold-check", "max_ms": 1500 },
-    { "name": "hot-edit-check", "max_ms": 750 },
+    { "name": "hot-edit-check", "max_ms": 750, "max_rss_mb": 200 },
     { "name": "review-focus", "max_ms": 1500 },
-    { "name": "status-warm", "max_ms": 750 }
+    { "name": "status-warm", "max_ms": 750, "max_rss_mb": 200 }
   ]
 }

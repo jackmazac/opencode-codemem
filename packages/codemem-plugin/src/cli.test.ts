@@ -410,6 +410,7 @@ describe("runCodeMemCli", () => {
             queueDepth: 0,
             indexedFiles: 2,
             findingsCacheEntries: 0,
+            rssBytes: 64 * 1024 * 1024,
             metrics: {
               operations: {},
               counters: {},
@@ -465,6 +466,7 @@ describe("runCodeMemCli", () => {
         queueDepth: 0,
         indexedFiles: 2,
         findingsCacheEntries: 0,
+        rssBytes: 64 * 1024 * 1024,
         metrics: {
           operations: {},
           counters: {},
@@ -499,6 +501,7 @@ describe("runCodeMemCli", () => {
             queueDepth: 0,
             indexedFiles: 2,
             findingsCacheEntries: 0,
+            rssBytes: 64 * 1024 * 1024,
             metrics: {
               operations: {},
               counters: {},

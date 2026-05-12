@@ -10,6 +10,7 @@ type BenchResult = {
   p95_ms?: number;
   max_ms?: number;
   output_max_bytes?: number;
+  rss_mb?: number;
   ok: boolean;
 };
 
@@ -29,6 +30,8 @@ type ThresholdCheck = {
   p95_ms?: number;
   observed_max_ms?: number;
   output_max_bytes?: number;
+  rss_mb?: number;
+  max_rss_mb?: number;
   max_ms: number;
   status: "pass" | "fail";
 };
@@ -44,8 +47,8 @@ type ThresholdReport = {
 
 type ThresholdConfig = {
   schema_version: 1;
-  quick: Array<{ name: string; max_ms: number }>;
-  full: Array<{ name: string; max_ms: number }>;
+  quick: Array<{ name: string; max_ms: number; max_rss_mb?: number }>;
+  full: Array<{ name: string; max_ms: number; max_rss_mb?: number }>;
 };
 
 const args = process.argv.slice(2);
@@ -66,8 +69,16 @@ const checks = thresholdsFor(thresholds, bench.mode).map((threshold) => {
     p95_ms: result.p95_ms,
     observed_max_ms: result.max_ms,
     output_max_bytes: result.output_max_bytes,
+    rss_mb: result.rss_mb,
+    max_rss_mb: threshold.maxRssMb,
     max_ms: threshold.maxMs,
-    status: result.ok && result.duration_ms <= threshold.maxMs ? "pass" : "fail",
+    status:
+      result.ok &&
+      result.duration_ms <= threshold.maxMs &&
+      (threshold.maxRssMb === undefined ||
+        (result.rss_mb !== undefined && result.rss_mb <= threshold.maxRssMb))
+        ? "pass"
+        : "fail",
   } satisfies ThresholdCheck;
 });
 
@@ -86,7 +97,11 @@ if (json) {
   console.log(JSON.stringify(report, null, 2));
 } else {
   for (const item of checks) {
-    console.log(`${item.status}\t${item.name}\t${item.actual_ms}ms\t<= ${item.max_ms}ms`);
+    const rss =
+      item.max_rss_mb === undefined
+        ? ""
+        : `\trss=${item.rss_mb ?? "missing"}MB <= ${item.max_rss_mb}MB`;
+    console.log(`${item.status}\t${item.name}\t${item.actual_ms}ms\t<= ${item.max_ms}ms${rss}`);
   }
 }
 
@@ -118,10 +133,11 @@ function readThresholds(filePath: string): ThresholdConfig {
 function thresholdsFor(
   config: ThresholdConfig,
   mode: BenchReport["mode"],
-): Array<{ name: string; maxMs: number }> {
+): Array<{ name: string; maxMs: number; maxRssMb?: number }> {
   return (mode === "quick" ? config.quick : config.full).map((item) => ({
     name: item.name,
     maxMs: item.max_ms,
+    maxRssMb: item.max_rss_mb,
   }));
 }
 

@@ -302,7 +302,7 @@ async function runFullBenches(projectRoot: string): Promise<BenchResult[]> {
   return results;
 }
 
-function runBench(name: string, command: string[], _projectRoot: string): BenchResult {
+function runBench(name: string, command: string[], projectRoot: string): BenchResult {
   const iterations = Number(valueArg("--iterations") ?? (quick ? "3" : "5"));
   const durations: number[] = [];
   let ok = true;
@@ -328,6 +328,9 @@ function runBench(name: string, command: string[], _projectRoot: string): BenchR
     outputBytes = result.stdout.byteLength;
     outputMaxBytes = Math.max(outputMaxBytes, result.stdout.byteLength);
     rssMb = statusRssMb(stdout) ?? rssMb;
+  }
+  if (rssMb === undefined) {
+    rssMb = readDaemonRssMb(projectRoot);
   }
   durations.sort((left, right) => left - right);
   const p50Ms = percentile(durations, 0.5);
@@ -412,6 +415,20 @@ function statusRssMb(stdout: string): number | undefined {
   } catch {
     return undefined;
   }
+}
+
+function readDaemonRssMb(projectRoot: string): number | undefined {
+  const result = Bun.spawnSync(
+    ["bun", cli, "status", "--project-root", projectRoot, "--json"],
+    {
+      cwd: repoRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env,
+    },
+  );
+  if (result.exitCode !== 0) return undefined;
+  return statusRssMb(new TextDecoder().decode(result.stdout).trim());
 }
 
 function valueArg(name: string): string | undefined {

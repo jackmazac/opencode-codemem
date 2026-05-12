@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-12T21:22:27.131Z",
+  "bench_mode": "full",
+  "result_path": "/Users/jack.mazac/Developer/codemem/bench/results/codemem-bench-threshold-full.json",
+  "ok": true,
+  "checks": [
+    {
+      "name": "status-cold",
+      "actual_ms": 100,
+      "p50_ms": 35,
+      "p95_ms": 100,
+      "observed_max_ms": 100,
+      "output_max_bytes": 2330,
+      "rss_mb": 6.3,
+      "max_rss_mb": 200,
+      "max_ms": 1500,
+      "status": "pass"
+    },
+    {
+      "name": "cold-check",
+      "actual_ms": 37,
+      "p50_ms": 35,
+      "p95_ms": 37,
+      "observed_max_ms": 37,
+      "output_max_bytes": 214,
+      "rss_mb": 6.3,
+      "max_ms": 1500,
+      "status": "pass"
+    },
+    {
+      "name": "hot-edit-check",
+      "actual_ms": 37,
+      "p50_ms": 34,
+      "p95_ms": 37,
+      "observed_max_ms": 37,
+      "output_max_bytes": 214,
+      "rss_mb": 9.3,
+      "max_rss_mb": 200,
+      "max_ms": 750,
+      "status": "pass"
+    },
+    {
+      "name": "review-focus",
+      "actual_ms": 37,
+      "p50_ms": 35,
+      "p95_ms": 37,
+      "observed_max_ms": 37,
+      "output_max_bytes": 2770,
+      "rss_mb": 9.3,
+      "max_ms": 1500,
+      "status": "pass"
+    },
+    {
+      "name": "status-warm",
+      "actual_ms": 35,
+      "p50_ms": 33,
+      "p95_ms": 35,
+      "observed_max_ms": 35,
+      "output_max_bytes": 2807,
+      "rss_mb": 9.3,
+      "max_rss_mb": 200,
+      "max_ms": 750,
+      "status": "pass"
+    }
+  ]
+}

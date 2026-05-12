@@ -259,6 +259,11 @@ function validateHealthResult(value: unknown): HealthResponse {
       result.findingsCacheEntries,
       "invalid health result: findingsCacheEntries",
     ),
+    rssBytes: optionalNullableNumber(result.rssBytes, "invalid health result: rssBytes"),
+    rssUnavailableReason: optionalString(
+      result.rssUnavailableReason,
+      "invalid health result: rssUnavailableReason",
+    ),
     metrics: optionalTelemetrySnapshot(result.metrics),
   };
 }
@@ -314,6 +319,16 @@ function requireNumber(value: unknown, message: string): number {
 function optionalNumber(value: unknown, message: string): number | undefined {
   if (value === undefined) return undefined;
   return requireNumber(value, message);
+}
+
+function optionalNullableNumber(value: unknown, message: string): number | null | undefined {
+  if (value === undefined || value === null) return value;
+  return requireNumber(value, message);
+}
+
+function optionalString(value: unknown, message: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return requireString(value, message);
 }
 
 function requireBoolean(value: unknown, message: string): boolean {
