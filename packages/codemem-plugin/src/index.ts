@@ -4,13 +4,13 @@ import {
   compareSeverity,
   type CodeMemFinding,
   type FilesChangedNotification,
-  type Severity,
 } from "@codemem/shared/protocol";
 import { loadCodeMemConfig, resolveStateDirectory, type LoadedCodeMemConfig } from "@codemem/shared/config";
 import type { Plugin } from "@opencode-ai/plugin";
 import { makeEnvelope } from "@jackmazac/opencode-fleet-contracts";
 import { emitFleet, wrapPlugin } from "@jackmazac/opencode-host-adapter";
 import { createCodeMemTools, type CodeMemToolRuntime } from "./tools";
+import { applyToolSurfaceBudget, resolveCodememPluginToolSurfaceMaxChars } from "./plugin-tool-budget";
 import { DaemonSupervisor } from "./daemon/supervisor";
 import type { DaemonClient } from "./daemon/client";
 
@@ -183,8 +183,12 @@ const plugin: Plugin = async (input) => {
     projectRoot: runtime.projectRoot,
   });
 
+  const loaded = await runtime.getConfig();
+  const toolBudget = resolveCodememPluginToolSurfaceMaxChars(loaded.config);
+  const tools = applyToolSurfaceBudget(createCodeMemTools(runtime), toolBudget);
+
   return {
-    tool: createCodeMemTools(runtime),
+    tool: tools,
 
     event: async ({ event }) => {
       const started = Date.now();

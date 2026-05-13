@@ -255,6 +255,7 @@ function testConfig(): CodeMemConfig {
       cooldownMs: 2000,
     },
     maxFindings: 50,
+    pluginToolSurfaceMaxChars: 40_000,
   };
 }
 

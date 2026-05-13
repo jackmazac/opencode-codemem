@@ -64,6 +64,8 @@ export type CodeMemConfig = {
   telemetry: TelemetryConfig;
   promptInjection: PromptInjectionPolicy;
   maxFindings: number;
+  /** Max characters for all plugin tool descriptions + JSON Schemas combined. */
+  pluginToolSurfaceMaxChars: number;
 };
 
 export type LoadedCodeMemConfig = {
@@ -127,6 +129,7 @@ const DEFAULT_CONFIG: CodeMemConfig = {
     cooldownMs: 2_000,
   },
   maxFindings: 50,
+  pluginToolSurfaceMaxChars: 40_000,
 };
 
 export async function loadCodeMemConfig(
@@ -208,6 +211,12 @@ export function normalizeConfig(config: CodeMemConfig): CodeMemConfig {
 
   if (normalized.maxFindings <= 0) {
     normalized.maxFindings = DEFAULT_CONFIG.maxFindings;
+  }
+  if (
+    normalized.pluginToolSurfaceMaxChars <= 0 ||
+    normalized.pluginToolSurfaceMaxChars > 10_000_000
+  ) {
+    normalized.pluginToolSurfaceMaxChars = DEFAULT_CONFIG.pluginToolSurfaceMaxChars;
   }
   normalized.thresholds.maxFindings = Math.max(1, normalized.thresholds.maxFindings);
 
@@ -296,6 +305,9 @@ function mergeConfig(base: CodeMemConfig, next: Partial<CodeMemConfig>): CodeMem
   if (Array.isArray(next.ignore)) merged.ignore = [...next.ignore];
   if (Array.isArray(next.packageBoundaries)) merged.packageBoundaries = [...next.packageBoundaries];
   if (typeof next.maxFindings === "number") merged.maxFindings = next.maxFindings;
+  if (typeof next.pluginToolSurfaceMaxChars === "number") {
+    merged.pluginToolSurfaceMaxChars = next.pluginToolSurfaceMaxChars;
+  }
 
   if (next.layers) merged.layers = { ...merged.layers, ...next.layers };
   if (next.thresholds) merged.thresholds = { ...merged.thresholds, ...next.thresholds };
