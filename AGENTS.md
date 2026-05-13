@@ -1,4 +1,4 @@
-# @codemem/plugin — agent guide
+# @mazac-fox/codemem-plugin — agent guide
 
 ## Scope
 
@@ -8,8 +8,8 @@ Code-graph truth. Drift, duplication, cycles, dead code, impact cones, API surfa
 
 `FleetCorrelation` type in `packages/codemem-shared/src/protocol.ts`. Fleet IDs flow through every relevant request type as optional fields. The Rust daemon accepts them and lightly persists in session metadata (does NOT contaminate graph identity tables — `files`, `imports`, `public_exports`, `clone_fingerprints`, `type_shapes` are keyed on code-object identity only).
 
-Current plugin version: `0.1.1` (packaged as `artifacts/codemem-plugin-0.1.1.tgz`).
-Shared package version: `0.1.0` (packaged as `artifacts/codemem-shared-0.1.0.tgz`).
+Current plugin version: `0.1.1` (packaged as `artifacts/mazac-fox-codemem-plugin-0.1.1.tgz`).
+Shared package version: `0.1.0` (packaged as `artifacts/mazac-fox-codemem-shared-0.1.0.tgz`).
 
 ## Architecture
 
@@ -100,7 +100,7 @@ Codemem never blocks tool execution itself. It does not hold edit locks (Concord
 
 ## Packaging
 
-Distribution is `tgz` at `artifacts/codemem-plugin-0.1.1.tgz`. Fleet installs via file reference. Regenerate after plugin changes:
+Distribution is `tgz` at `artifacts/mazac-fox-codemem-plugin-0.1.1.tgz`. Fleet installs via file reference. Regenerate after plugin changes:
 
 ```bash
 bun run package:local

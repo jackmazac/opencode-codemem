@@ -3,8 +3,8 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
-import type { CodeMemConfig } from "@codemem/shared/config";
-import { CODEMEM_PROTOCOL_VERSION, decodeFrames, encodeFrame } from "@codemem/shared/protocol";
+import type { CodeMemConfig } from "@mazac-fox/codemem-shared/config";
+import { CODEMEM_PROTOCOL_VERSION, decodeFrames, encodeFrame } from "@mazac-fox/codemem-shared/protocol";
 import {
   cleanupStaleEndpoint,
   DaemonSupervisor,

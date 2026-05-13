@@ -4,10 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { CodeMemConfig } from "@codemem/shared/config";
-import { CODEMEM_PROTOCOL_VERSION, type HealthResponse } from "@codemem/shared/protocol";
-import { makeEnvelope } from "@jackmazac/opencode-fleet-contracts";
-import { emitFleet } from "@jackmazac/opencode-host-adapter";
+import type { CodeMemConfig } from "@mazac-fox/codemem-shared/config";
+import { CODEMEM_PROTOCOL_VERSION, type HealthResponse } from "@mazac-fox/codemem-shared/protocol";
+import { makeEnvelope } from "@mazac-fox/opencode-fleet-contracts";
+import { emitFleet } from "@mazac-fox/opencode-host-adapter";
 import { DaemonClient, type DaemonEndpoint } from "./client";
 
 export type SupervisorOptions = {

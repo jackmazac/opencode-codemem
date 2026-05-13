@@ -3,13 +3,13 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
-import { validateHealthReport } from "@jackmazac/opencode-fleet-contracts";
+import { validateHealthReport } from "@mazac-fox/opencode-fleet-contracts";
 import {
   CODEMEM_PROTOCOL_VERSION,
   decodeFrames,
   encodeFrame,
   type RpcResponseEnvelope,
-} from "@codemem/shared/protocol";
+} from "@mazac-fox/codemem-shared/protocol";
 import { parseCliArgs, runCodeMemCli, type CliRuntime } from "./cli";
 import { DaemonClient } from "./daemon/client";
 

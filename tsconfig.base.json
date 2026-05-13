@@ -20,10 +20,10 @@
       "DOM"
     ],
     "paths": {
-      "@codemem/shared/*": [
+      "@mazac-fox/codemem-shared/*": [
         "./packages/codemem-shared/src/*"
       ],
-      "@codemem/shared": [
+      "@mazac-fox/codemem-shared": [
         "./packages/codemem-shared/src/index.ts"
       ],
       "@opencode-ai/plugin": [

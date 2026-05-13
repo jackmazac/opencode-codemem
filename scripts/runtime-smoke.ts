@@ -8,15 +8,15 @@ import { plugin } from "bun";
 plugin({
   name: "codemem-source-alias",
   setup(build) {
-    build.onResolve({ filter: /^@codemem\/shared$/ }, () => ({
+    build.onResolve({ filter: /^@mazac-fox\/codemem-shared$/ }, () => ({
       path: path.join(import.meta.dir, "..", "packages/codemem-shared/src/index.ts"),
     }));
-    build.onResolve({ filter: /^@codemem\/shared\/.+/ }, (args) => ({
+    build.onResolve({ filter: /^@mazac-fox\/codemem-shared\/.+/ }, (args) => ({
       path: path.join(
         import.meta.dir,
         "..",
         "packages/codemem-shared/src",
-        `${args.path.slice("@codemem/shared/".length)}.ts`,
+        `${args.path.slice("@mazac-fox/codemem-shared/".length)}.ts`,
       ),
     }));
   },

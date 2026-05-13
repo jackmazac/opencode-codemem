@@ -1,7 +1,20 @@
 {
-  "name": "@codemem/shared",
+  "name": "@mazac-fox/codemem-shared",
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
+  "description": "Codemem wire protocol, FleetCorrelation, and report helpers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackmazac/codemem.git",
+    "directory": "packages/codemem-shared"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepublishOnly": "cd ../.. && bun install && bun run build:ts"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -9,7 +22,7 @@
     "package.json"
   ],
   "dependencies": {
-    "@jackmazac/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts"
+    "@mazac-fox/opencode-fleet-contracts": "^0.1.0"
   },
   "exports": {
     ".": {

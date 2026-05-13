@@ -1,7 +1,20 @@
 {
-  "name": "@codemem/plugin",
+  "name": "@mazac-fox/codemem-plugin",
   "version": "0.1.1",
   "type": "module",
+  "license": "MIT",
+  "description": "OpenCode plugin and CLI for Codemem code-graph advisory tools",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackmazac/codemem.git",
+    "directory": "packages/codemem-plugin"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepublishOnly": "cd ../.. && bun install && bun run build && bun ./scripts/stage-codemem-daemon-bin.mjs"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
@@ -13,9 +26,9 @@
     "package.json"
   ],
   "dependencies": {
-    "@codemem/shared": "0.1.0",
-    "@jackmazac/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts",
-    "@jackmazac/opencode-host-adapter": "file:/Users/jack.mazac/Developer/opencode-host-adapter",
+    "@mazac-fox/codemem-shared": "^0.1.0",
+    "@mazac-fox/opencode-fleet-contracts": "^0.1.0",
+    "@mazac-fox/opencode-host-adapter": "^0.1.0",
     "@opencode-ai/plugin": "1.14.31"
   },
   "exports": {

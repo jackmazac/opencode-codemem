@@ -11,7 +11,7 @@
     "build:daemon": "cargo build --release --manifest-path packages/codemem-daemon/Cargo.toml",
     "build": "bun run build:ts && bun run build:daemon",
     "typecheck": "tsgo -b packages/codemem-shared packages/codemem-plugin --pretty false",
-    "lint:no-zod": "bun run ./node_modules/@jackmazac/opencode-host-adapter/src/cli/check-no-zod-import.ts packages/codemem-plugin/src/",
+    "lint:no-zod": "bun run ./node_modules/@mazac-fox/opencode-host-adapter/src/cli/check-no-zod-import.ts packages/codemem-plugin/src/",
     "test:ts": "bun test",
     "test:daemon": "cargo test --manifest-path packages/codemem-daemon/Cargo.toml",
     "test": "bun run test:ts && bun run test:daemon",
@@ -25,8 +25,12 @@
     "clean": "node ./scripts/clean.mjs"
   },
   "devDependencies": {
-    "@jackmazac/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts",
-    "@jackmazac/opencode-host-adapter": "file:/Users/jack.mazac/Developer/opencode-host-adapter",
+    "@mazac-fox/opencode-fleet-contracts": "file:../opencode-fleet-contracts",
+    "@mazac-fox/opencode-host-adapter": "file:../opencode-host-adapter",
     "@typescript/native-preview": "latest"
+  },
+  "overrides": {
+    "@mazac-fox/opencode-fleet-contracts": "file:../opencode-fleet-contracts",
+    "@mazac-fox/opencode-host-adapter": "file:../opencode-host-adapter"
   }
 }

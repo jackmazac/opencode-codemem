@@ -39,7 +39,7 @@ import {
   type StatusRequest,
   type StatusResponse,
   type TelemetrySnapshot,
-} from "@codemem/shared/protocol";
+} from "@mazac-fox/codemem-shared/protocol";
 
 export type DaemonEndpoint = {
   address: string;

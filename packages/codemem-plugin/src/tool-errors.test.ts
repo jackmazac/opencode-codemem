@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { defaultCodeMemConfig } from "@codemem/shared/config";
+import { defaultCodeMemConfig } from "@mazac-fox/codemem-shared/config";
 import { createCodeMemTools, type CodeMemToolRuntime } from "./tools";
 
 const toolCases = [

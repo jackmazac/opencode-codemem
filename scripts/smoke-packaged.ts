@@ -4,15 +4,15 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { validateHealthReport } from "@jackmazac/opencode-fleet-contracts";
+import { validateHealthReport } from "@mazac-fox/opencode-fleet-contracts";
 
 type SmokeStep = { name: string; ok: boolean; detail: string };
 
 const json = process.argv.includes("--json");
 const keepTemp = process.argv.includes("--keep-temp");
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const sharedTgz = path.join(root, "artifacts", "codemem-shared-0.1.0.tgz");
-const pluginTgz = path.join(root, "artifacts", "codemem-plugin-0.1.1.tgz");
+const sharedTgz = path.join(root, "artifacts", "mazac-fox-codemem-shared-0.1.0.tgz");
+const pluginTgz = path.join(root, "artifacts", "mazac-fox-codemem-plugin-0.1.1.tgz");
 const temp = await mkdtemp(path.join(os.tmpdir(), "codemem-packaged-smoke-"));
 const configRoot = path.join(temp, "config");
 const projectRoot = path.join(temp, "project");
@@ -37,12 +37,12 @@ try {
     JSON.stringify(
       {
         dependencies: {
-          "@codemem/shared": `file:${sharedTgz}`,
-          "@codemem/plugin": `file:${pluginTgz}`,
-          "@jackmazac/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts",
-          "@jackmazac/opencode-host-adapter": "file:/Users/jack.mazac/Developer/opencode-host-adapter",
+          "@mazac-fox/codemem-shared": `file:${sharedTgz}`,
+          "@mazac-fox/codemem-plugin": `file:${pluginTgz}`,
+          "@mazac-fox/opencode-fleet-contracts": "file:/Users/jack.mazac/Developer/opencode-fleet-contracts",
+          "@mazac-fox/opencode-host-adapter": "file:/Users/jack.mazac/Developer/opencode-host-adapter",
         },
-        overrides: { "@codemem/shared": `file:${sharedTgz}` },
+        overrides: { "@mazac-fox/codemem-shared": `file:${sharedTgz}` },
       },
       null,
       2,

@@ -10,7 +10,7 @@ describe("plugin startup architecture", () => {
       new URL("../package.json", import.meta.url),
     ).json();
 
-    expect(readDependency(packageJson, "@jackmazac/opencode-host-adapter")).toBeDefined();
+    expect(readDependency(packageJson, "@mazac-fox/opencode-host-adapter")).toBeDefined();
   });
 
   test("tool execution tolerates host adapter metadata object context", async () => {

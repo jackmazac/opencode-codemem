@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import type { CodeMemConfig } from "@codemem/shared/config";
+import type { CodeMemConfig } from "@mazac-fox/codemem-shared/config";
 
 const z = tool.schema;
 

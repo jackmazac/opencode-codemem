@@ -1,4 +1,4 @@
-import { runPluginContractTests } from "@jackmazac/opencode-host-adapter/contract-test";
+import { runPluginContractTests } from "@mazac-fox/opencode-host-adapter/contract-test";
 import { fileURLToPath } from "node:url";
 
 const expectedTools = [

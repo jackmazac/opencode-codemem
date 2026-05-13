@@ -46,7 +46,7 @@ The codemem daemon is spawned as a child process. When it exits, opencode receiv
 
 - Always return from `execute` with a string or `{output, metadata}` shape.
 - Never throw from `execute` if you can avoid it — wrap with try/catch and return error JSON.
-- The `@jackmazac/opencode-host-adapter` wrapper would catch thrown errors automatically, but codemem currently doesn't use it. Consider adopting it.
+- The `@mazac-fox/opencode-host-adapter` wrapper would catch thrown errors automatically, but codemem currently doesn't use it. Consider adopting it.
 
 ## Versioning
 

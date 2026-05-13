@@ -8,10 +8,10 @@ import {
   type CodeMemToolErrorCode,
   type CodeMemToolErrorResponse,
   type FleetCorrelation,
-} from "@codemem/shared/protocol";
-import { createCodememAuditArtifact, createCodememJournalEntry } from "@codemem/shared/artifacts";
+} from "@mazac-fox/codemem-shared/protocol";
+import { createCodememAuditArtifact, createCodememJournalEntry } from "@mazac-fox/codemem-shared/artifacts";
 import { tool, type ToolDefinition } from "@opencode-ai/plugin";
-import type { LoadedCodeMemConfig } from "@codemem/shared/config";
+import type { LoadedCodeMemConfig } from "@mazac-fox/codemem-shared/config";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { DaemonClient } from "./daemon/client";

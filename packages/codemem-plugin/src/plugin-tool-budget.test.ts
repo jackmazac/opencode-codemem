@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { tool, type ToolDefinition } from "@opencode-ai/plugin";
 import { applyToolSurfaceBudget, resolveCodememPluginToolSurfaceMaxChars } from "./plugin-tool-budget";
-import type { CodeMemConfig } from "@codemem/shared/config";
+import type { CodeMemConfig } from "@mazac-fox/codemem-shared/config";
 
 const z = tool.schema;
 

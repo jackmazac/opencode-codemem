@@ -4,11 +4,11 @@ import {
   compareSeverity,
   type CodeMemFinding,
   type FilesChangedNotification,
-} from "@codemem/shared/protocol";
-import { loadCodeMemConfig, resolveStateDirectory, type LoadedCodeMemConfig } from "@codemem/shared/config";
+} from "@mazac-fox/codemem-shared/protocol";
+import { loadCodeMemConfig, resolveStateDirectory, type LoadedCodeMemConfig } from "@mazac-fox/codemem-shared/config";
 import type { Plugin } from "@opencode-ai/plugin";
-import { makeEnvelope } from "@jackmazac/opencode-fleet-contracts";
-import { emitFleet, wrapPlugin } from "@jackmazac/opencode-host-adapter";
+import { makeEnvelope } from "@mazac-fox/opencode-fleet-contracts";
+import { emitFleet, wrapPlugin } from "@mazac-fox/opencode-host-adapter";
 import { createCodeMemTools, type CodeMemToolRuntime } from "./tools";
 import { applyToolSurfaceBudget, resolveCodememPluginToolSurfaceMaxChars } from "./plugin-tool-budget";
 import { DaemonSupervisor } from "./daemon/supervisor";

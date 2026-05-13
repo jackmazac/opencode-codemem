@@ -8,7 +8,7 @@ import {
   decodeFrames,
   encodeFrame,
   type RpcResponseEnvelope,
-} from "@codemem/shared/protocol";
+} from "@mazac-fox/codemem-shared/protocol";
 import { DaemonClient } from "./client";
 
 describe("DaemonClient result validation", () => {

@@ -1,21 +1,21 @@
 #!/usr/bin/env bun
 import fs from "node:fs/promises";
 import path from "node:path";
-import { makeHealthReport, type HealthCheck, type HealthReport } from "@jackmazac/opencode-fleet-contracts";
+import { makeHealthReport, type HealthCheck, type HealthReport } from "@mazac-fox/opencode-fleet-contracts";
 import {
   createCodememAuditArtifact,
   createCodememJournalEntry,
   type CodememJournalEntry,
-} from "@codemem/shared/artifacts";
+} from "@mazac-fox/codemem-shared/artifacts";
 import {
   createFindingBaseline,
   diffFindingBaseline,
   parseFindingBaselineJson,
   type FindingBaseline,
   type FindingBaselineDiff,
-} from "@codemem/shared/baseline";
-import { loadCodeMemConfig, resolveStateDirectory } from "@codemem/shared/config";
-import { createMarkdownReport, createSarifReport, explainFinding } from "@codemem/shared/report";
+} from "@mazac-fox/codemem-shared/baseline";
+import { loadCodeMemConfig, resolveStateDirectory } from "@mazac-fox/codemem-shared/config";
+import { createMarkdownReport, createSarifReport, explainFinding } from "@mazac-fox/codemem-shared/report";
 import type {
   CheckResponse,
   ChangeRiskResponse,
@@ -28,7 +28,7 @@ import type {
   MaintainResponse,
   RebuildResponse,
   StatusResponse,
-} from "@codemem/shared/protocol";
+} from "@mazac-fox/codemem-shared/protocol";
 import { DaemonSupervisor, type DaemonStopResult, type StaleEndpointCleanup } from "./daemon/supervisor";
 
 type CodeMemDoctorReport = HealthReport & { health: StatusResponse["health"] };
@@ -944,7 +944,7 @@ function formatStatus(status: StatusResponse): string {
 function formatDoctor(report: HealthReport): string {
   return [
     `status: ${report.status}`,
-    ...report.checks.map((check) => {
+    ...report.checks.map((check: HealthCheck) => {
       const detail = check.message ? ` - ${check.message}` : "";
       return `${check.status}: ${check.name}${detail}`;
     }),
