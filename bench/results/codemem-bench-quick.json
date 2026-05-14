@@ -2,7 +2,7 @@
   "schema_version": 1,
   "mode": "quick",
   "project_root": "/Users/jack.mazac/Developer/codemem",
-  "generated_at": "2026-05-13T23:52:52.381Z",
+  "generated_at": "2026-05-14T21:31:31.749Z",
   "result_path": "/Users/jack.mazac/Developer/codemem/bench/results/codemem-bench-quick.json",
   "results": [
     {
@@ -15,16 +15,16 @@
         "/Users/jack.mazac/Developer/codemem",
         "--json"
       ],
-      "duration_ms": 34,
+      "duration_ms": 47,
       "p50_ms": 33,
-      "p95_ms": 34,
-      "max_ms": 34,
+      "p95_ms": 47,
+      "max_ms": 47,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 4612,
       "output_max_bytes": 4612,
-      "rss_mb": 5.1
+      "rss_mb": 3.5
     },
     {
       "name": "status",
@@ -36,16 +36,16 @@
         "/Users/jack.mazac/Developer/codemem",
         "--json"
       ],
-      "duration_ms": 32,
-      "p50_ms": 32,
-      "p95_ms": 32,
-      "max_ms": 32,
+      "duration_ms": 35,
+      "p50_ms": 33,
+      "p95_ms": 35,
+      "max_ms": 35,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 3095,
       "output_max_bytes": 3095,
-      "rss_mb": 5.1
+      "rss_mb": 3.5
     },
     {
       "name": "check",
@@ -61,16 +61,16 @@
         "50",
         "--json"
       ],
-      "duration_ms": 35,
-      "p50_ms": 32,
-      "p95_ms": 35,
-      "max_ms": 35,
+      "duration_ms": 41,
+      "p50_ms": 33,
+      "p95_ms": 41,
+      "max_ms": 41,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 8439,
       "output_max_bytes": 8439,
-      "rss_mb": 5.1
+      "rss_mb": 3.5
     },
     {
       "name": "drift_map",
@@ -84,16 +84,16 @@
         "50",
         "--json"
       ],
-      "duration_ms": 35,
-      "p50_ms": 34,
-      "p95_ms": 35,
-      "max_ms": 35,
+      "duration_ms": 41,
+      "p50_ms": 40,
+      "p95_ms": 41,
+      "max_ms": 41,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 78292,
       "output_max_bytes": 78292,
-      "rss_mb": 5.1
+      "rss_mb": 3.5
     },
     {
       "name": "conflicts",
@@ -105,16 +105,16 @@
         "/Users/jack.mazac/Developer/codemem",
         "--json"
       ],
-      "duration_ms": 34,
-      "p50_ms": 30,
-      "p95_ms": 34,
-      "max_ms": 34,
+      "duration_ms": 35,
+      "p50_ms": 33,
+      "p95_ms": 35,
+      "max_ms": 35,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 45,
       "output_max_bytes": 45,
-      "rss_mb": 8.3
+      "rss_mb": 7.5
     },
     {
       "name": "change_risk",
@@ -132,16 +132,16 @@
         "50",
         "--json"
       ],
-      "duration_ms": 42,
-      "p50_ms": 38,
-      "p95_ms": 42,
-      "max_ms": 42,
+      "duration_ms": 35,
+      "p50_ms": 35,
+      "p95_ms": 35,
+      "max_ms": 35,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 28905,
       "output_max_bytes": 28905,
-      "rss_mb": 8.3
+      "rss_mb": 7.5
     },
     {
       "name": "api_surface",
@@ -155,16 +155,16 @@
         "100",
         "--json"
       ],
-      "duration_ms": 31,
-      "p50_ms": 31,
-      "p95_ms": 31,
-      "max_ms": 31,
+      "duration_ms": 34,
+      "p50_ms": 33,
+      "p95_ms": 34,
+      "max_ms": 34,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 14780,
       "output_max_bytes": 14780,
-      "rss_mb": 8.3
+      "rss_mb": 7.5
     },
     {
       "name": "impact_cone",
@@ -180,16 +180,16 @@
         "2",
         "--json"
       ],
-      "duration_ms": 35,
+      "duration_ms": 37,
       "p50_ms": 33,
-      "p95_ms": 35,
-      "max_ms": 35,
+      "p95_ms": 37,
+      "max_ms": 37,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 687,
       "output_max_bytes": 687,
-      "rss_mb": 8.3
+      "rss_mb": 7.5
     },
     {
       "name": "layer_boundaries",
@@ -203,16 +203,16 @@
         "50",
         "--json"
       ],
-      "duration_ms": 36,
-      "p50_ms": 35,
-      "p95_ms": 36,
-      "max_ms": 36,
+      "duration_ms": 34,
+      "p50_ms": 33,
+      "p95_ms": 34,
+      "max_ms": 34,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 63,
       "output_max_bytes": 63,
-      "rss_mb": 8.8
+      "rss_mb": 7.5
     },
     {
       "name": "review_focus",
@@ -230,16 +230,16 @@
         "10",
         "--json"
       ],
-      "duration_ms": 36,
-      "p50_ms": 34,
-      "p95_ms": 36,
-      "max_ms": 36,
+      "duration_ms": 38,
+      "p50_ms": 37,
+      "p95_ms": 38,
+      "max_ms": 38,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 27084,
       "output_max_bytes": 27084,
-      "rss_mb": 8.8
+      "rss_mb": 7.5
     },
     {
       "name": "artifact",
@@ -257,16 +257,16 @@
         "10",
         "--json"
       ],
-      "duration_ms": 33,
-      "p50_ms": 31,
-      "p95_ms": 33,
-      "max_ms": 33,
+      "duration_ms": 37,
+      "p50_ms": 37,
+      "p95_ms": 37,
+      "max_ms": 37,
       "iterations": 3,
       "ok": true,
       "exit_code": 0,
       "output_bytes": 115,
       "output_max_bytes": 115,
-      "rss_mb": 8.8
+      "rss_mb": 7.5
     }
   ],
   "ok": true
