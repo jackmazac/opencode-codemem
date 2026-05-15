@@ -192,28 +192,34 @@ const plugin: Plugin = async (input) => {
 
     event: async ({ event }) => {
       const started = Date.now();
-      const eventType = String(event?.type ?? "");
+      if (typeof event !== "object" || event === null) {
+        emitPluginTelemetry("hook.event", {
+          durationMs: Date.now() - started,
+          eventType: "",
+        });
+        return;
+      }
+      const kind = typeof event.type === "string" ? event.type : "";
       try {
-        if (eventType === "file.edited") {
-          const file = event?.properties?.file;
-          if (typeof file === "string") {
-            const sessionID = typeof event?.properties?.sessionID === "string" ? event.properties.sessionID : "event";
-            await runtime.queueChangedFiles(sessionID, [file], "event");
-          }
+        if (event.type === "file.edited") {
+          const file = event.properties.file;
+          if (typeof file !== "string") return;
+          await runtime.queueChangedFiles("event", [file], "event");
           return;
         }
 
-        if (eventType === "file.watcher.updated") {
-          const file = event?.properties?.file;
-          const changeKind = event?.properties?.event;
-          if (typeof file === "string" && (changeKind === "add" || changeKind === "change")) {
+        if (event.type === "file.watcher.updated") {
+          const file = event.properties.file;
+          const changeKind = event.properties.event;
+          if (typeof file !== "string") return;
+          if (changeKind === "add" || changeKind === "change") {
             await runtime.queueChangedFiles("watcher", [file], "event");
           }
         }
       } finally {
         emitPluginTelemetry("hook.event", {
           durationMs: Date.now() - started,
-          eventType,
+          eventType: kind,
         });
       }
     },

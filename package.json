@@ -27,7 +27,9 @@
   "devDependencies": {
     "@mazac-fox/opencode-fleet-contracts": "file:../opencode-fleet-contracts",
     "@mazac-fox/opencode-host-adapter": "file:../opencode-host-adapter",
-    "@typescript/native-preview": "latest"
+    "@typescript/native-preview": "latest",
+    "@types/node": "latest",
+    "@types/bun": "latest"
   },
   "overrides": {
     "@mazac-fox/opencode-fleet-contracts": "file:../opencode-fleet-contracts",

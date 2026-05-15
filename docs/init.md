@@ -111,7 +111,7 @@ The plugin in the attached workspace follows the right shape for OpenCode:
 * fail closed on tool calls with a bounded warning if the daemon is unavailable
 
 The implementation is here:
-[index.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/index.ts) · [supervisor.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/daemon/supervisor.ts) · [client.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/daemon/client.ts) · [tools.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/tools.ts)
+[index.ts](../packages/codemem-plugin/src/index.ts) · [supervisor.ts](../packages/codemem-plugin/src/daemon/supervisor.ts) · [client.ts](../packages/codemem-plugin/src/daemon/client.ts) · [tools.ts](../packages/codemem-plugin/src/tools.ts)
 
 Hot-path targets for v1:
 
@@ -124,7 +124,7 @@ Hot-path targets for v1:
 
 ### Agent-facing output contract
 
-The contract in [protocol.ts](sandbox:/mnt/data/codemem/packages/codemem-shared/src/protocol.ts) is compact and LLM-facing:
+The contract in [protocol.ts](../packages/codemem-shared/src/protocol.ts) is compact and LLM-facing:
 
 ```ts
 type CodeMemFinding =
@@ -173,7 +173,7 @@ Prompt injection is deliberately terse and bounded:
 </codemem_signal>
 ```
 
-That format is implemented by `buildPromptSignal()` in [protocol.ts](sandbox:/mnt/data/codemem/packages/codemem-shared/src/protocol.ts).
+That format is implemented by `buildPromptSignal()` in [protocol.ts](../packages/codemem-shared/src/protocol.ts).
 
 ### Shipped now vs planned
 
@@ -434,7 +434,7 @@ The attached code’s canonical state is SQLite, with future ANN files reserved 
 
 ### SQLite schema
 
-Implemented tables in [store.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/store.rs):
+Implemented tables in [store.rs](../packages/codemem-daemon/src/store.rs):
 
 * `files`
 * `imports`
@@ -483,7 +483,7 @@ Mmap/page-cache strategy:
 
 ### Configuration
 
-The implemented schema is in [config.ts](sandbox:/mnt/data/codemem/packages/codemem-shared/src/config.ts), with an example at [codemem.config.example.jsonc](sandbox:/mnt/data/codemem/codemem.config.example.jsonc).
+The implemented schema is in [config.ts](../packages/codemem-shared/src/config.ts), with an example at [codemem.config.example.jsonc](../codemem.config.example.jsonc).
 
 Representative config:
 
@@ -610,48 +610,42 @@ type RpcErrorEnvelope = {
 * simpler locking, simpler cache ownership, simpler cleanup
 
 Implemented code:
-[protocol.ts](sandbox:/mnt/data/codemem/packages/codemem-shared/src/protocol.ts) · [client.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/daemon/client.ts) · [rpc.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/rpc.rs)
+[protocol.ts](../packages/codemem-shared/src/protocol.ts) · [client.ts](../packages/codemem-plugin/src/daemon/client.ts) · [rpc.rs](../packages/codemem-daemon/src/rpc.rs)
 
 ## 7. Full implementation files
 
-Full workspace: [codemem workspace zip](sandbox:/mnt/data/codemem.zip)
+Full workspace: historical Codemem export zip (not checked into this repository).
 
 ### Plugin
 
-* [packages/codemem-plugin/src/index.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/index.ts)
-* [packages/codemem-plugin/src/daemon/supervisor.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/daemon/supervisor.ts)
-* [packages/codemem-plugin/src/daemon/client.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/daemon/client.ts)
-* [packages/codemem-plugin/src/tools.ts](sandbox:/mnt/data/codemem/packages/codemem-plugin/src/tools.ts)
+* [packages/codemem-plugin/src/index.ts](../packages/codemem-plugin/src/index.ts)
+* [packages/codemem-plugin/src/daemon/supervisor.ts](../packages/codemem-plugin/src/daemon/supervisor.ts)
+* [packages/codemem-plugin/src/daemon/client.ts](../packages/codemem-plugin/src/daemon/client.ts)
+* [packages/codemem-plugin/src/tools.ts](../packages/codemem-plugin/src/tools.ts)
 
 ### Shared
 
-* [packages/codemem-shared/src/protocol.ts](sandbox:/mnt/data/codemem/packages/codemem-shared/src/protocol.ts)
-* [packages/codemem-shared/src/config.ts](sandbox:/mnt/data/codemem/packages/codemem-shared/src/config.ts)
+* [packages/codemem-shared/src/protocol.ts](../packages/codemem-shared/src/protocol.ts)
+* [packages/codemem-shared/src/config.ts](../packages/codemem-shared/src/config.ts)
 
 ### Daemon
 
-* [packages/codemem-daemon/src/main.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/main.rs)
-* [packages/codemem-daemon/src/rpc.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/rpc.rs)
-* [packages/codemem-daemon/src/indexer.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/indexer.rs)
-* [packages/codemem-daemon/src/detectors/clones.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/detectors/clones.rs)
-* [packages/codemem-daemon/src/detectors/types.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/detectors/types.rs)
-* [packages/codemem-daemon/src/graph.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/graph.rs)
-* [packages/codemem-daemon/src/store.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/store.rs)
-* [packages/codemem-daemon/src/session_conflicts.rs](sandbox:/mnt/data/codemem/packages/codemem-daemon/src/session_conflicts.rs)
+* [packages/codemem-daemon/src/main.rs](../packages/codemem-daemon/src/main.rs)
+* [packages/codemem-daemon/src/rpc.rs](../packages/codemem-daemon/src/rpc.rs)
+* [packages/codemem-daemon/src/indexer.rs](../packages/codemem-daemon/src/indexer.rs)
+* [packages/codemem-daemon/src/detectors/clones.rs](../packages/codemem-daemon/src/detectors/clones.rs)
+* [packages/codemem-daemon/src/detectors/types.rs](../packages/codemem-daemon/src/detectors/types.rs)
+* [packages/codemem-daemon/src/graph.rs](../packages/codemem-daemon/src/graph.rs)
+* [packages/codemem-daemon/src/store.rs](../packages/codemem-daemon/src/store.rs)
+* [packages/codemem-daemon/src/session_conflicts.rs](../packages/codemem-daemon/src/session_conflicts.rs)
 
 ### Root / docs
 
-* [codemem.config.example.jsonc](sandbox:/mnt/data/codemem/codemem.config.example.jsonc)
-* [package.json](sandbox:/mnt/data/codemem/package.json)
-* [README.md](sandbox:/mnt/data/codemem/README.md)
+* [codemem.config.example.jsonc](../codemem.config.example.jsonc)
+* [package.json](../package.json)
+* [README.md](../README.md)
 
-### Helper files included to make the TS sample compile here
-
-* [types/opencode-plugin.d.ts](sandbox:/mnt/data/codemem/types/opencode-plugin.d.ts)
-* [types/zod.d.ts](sandbox:/mnt/data/codemem/types/zod.d.ts)
-* [types/node-shim.d.ts](sandbox:/mnt/data/codemem/types/node-shim.d.ts)
-
-Those shims exist because the published `@opencode-ai/plugin` package has had real packaging/export/version issues in 1.x. The shims mirror the verified v1.14.31 source surface and should be replaced by the real package once your exact OpenCode install path is validated. ([GitHub][21])
+Plugin API types come from the installed `@opencode-ai/plugin` package (repo dependency). Node built-ins for TypeScript use `@types/node` (workspace devDependency).
 
 ## 8. Install/distribution plan
 
@@ -731,7 +725,7 @@ Measure:
 
 | Risk                               | Why it is real                                                               | Mitigation                                                                                                                   |
 | ---------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| OpenCode API/package instability   | 1.x plugin/package surface is active and publishing issues have happened     | Compile against tagged source, keep local shims until install path is proven, smoke-test every OpenCode bump. ([GitHub][21]) |
+| OpenCode API/package instability   | 1.x plugin/package surface is active and publishing issues have happened     | Compile against tagged releases, pin `@opencode-ai/plugin`, smoke-test every OpenCode bump. ([GitHub][21]) |
 | Bun native-addon boundary          | Bun supports most, not all, Node-API; FFI and Workers are still experimental | Keep Bun thin; no canonical heavy analysis core in Bun. ([Bun][22])                                                          |
 | tsgo churn                         | Native TS compiler line still preview/unstable for programmatic use          | Do not depend on tsgo in v1. ([Microsoft for Developers][5])                                                                 |
 | Daemon lifecycle bugs              | stale PID/socket/token, orphaned child                                       | auth token, PID file, stale cleanup, health RPC, supervisor backoff                                                          |

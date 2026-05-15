@@ -19,15 +19,13 @@
       "ES2022",
       "DOM"
     ],
+    "types": ["bun", "node"],
     "paths": {
       "@mazac-fox/codemem-shared/*": [
         "./packages/codemem-shared/src/*"
       ],
       "@mazac-fox/codemem-shared": [
         "./packages/codemem-shared/src/index.ts"
-      ],
-      "@opencode-ai/plugin": [
-        "./node_modules/@opencode-ai/plugin/dist/index.d.ts"
       ]
     }
   }
